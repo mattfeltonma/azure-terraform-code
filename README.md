@@ -1,7 +1,7 @@
 # Terraform Code Samples
 
 ## Overview
-This repository contains Terraform code, bash scripts, and PowerShell scripts that I've put together and use for experimentation. Feel free to use this samples from this repository within the scope of the rules listed below.
+This repository contains Terraform code, bash scripts, and PowerShell scripts that I've put together and use for experimentation. Feel free to use samples from this repository within the scope of the rules listed below.
 
 ## The rules
 * This code is licensed under the [MIT license](.LICENSE). You can certainly open issues with questions and I'll do my best to answer them when time permits. However, it's on you to determine why it doesn't work from you. Don't waste your time or my time opening issues that only say "The code doesn't work." 
