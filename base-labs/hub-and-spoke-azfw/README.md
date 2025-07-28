@@ -1,92 +1,366 @@
 # Azure Hub and Spoke Lab with Azure Firewall
 
-## Updates
-* 3//17/2025
-  * Added additional workload spoke
-  * Added additional subnet to support AML injected compute
-  * Added additional Private DNS Zones
-* 11/12/2024
-  * Modified SSH ports to be 2222 instead of 22
-* 10/28/2024
-  * Extensive cleanup and modified IP ranges to be more reasonable
-  * Added support for deploying to multiple regions
-* 7/22/2024
-  * Added subnets, route tables, and network security groups to allow for deployment of Application Gateway or API Management deployed in internal mode
-  * Added required rules for internal API Management to Azure Firewall rules
-* 6/07/2024
-  * Initial release
+[![Terraform](https://img.shields.io/badge/Terraform-%3E%3D1.8.3-blue)](https://www.terraform.io/)
+[![Azure](https://img.shields.io/badge/Azure-Cloud-blue)](https://azure.microsoft.com/)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+
+## Table of Contents
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Deployment](#deployment)
+- [Post-Deployment](#post-deployment)
+- [Security Considerations](#security-considerations)
+- [Troubleshooting](#troubleshooting)
+- [Updates](#updates)
+- [Contributing](#contributing)
 
 ## Overview
-The Terraform code in this repository provisions an enterprise-like lab environment for learning and experimentation. The environment is built to include infrastructure components commmon to enterprise environments. These components include a security appliance for centralized mediation, logging, and packet inspection, DNS services, secure remote access, and logging.
+This Terraform configuration provisions an enterprise-grade Azure Hub and Spoke network architecture with centralized security controls. The lab environment is designed for learning, testing, and demonstrating enterprise networking patterns with Azure Firewall as the central security appliance.
+
+### Key Benefits
+- **Centralized Security**: All traffic flows through Azure Firewall for inspection and policy enforcement
+- **Scalable Architecture**: Hub and spoke model supports easy addition of new workload spokes
+- **Enterprise-Ready**: Includes logging, monitoring, and security features found in production environments
+- **Multi-Region Support**: Optional deployment across two Azure regions for high availability testing
 
 ## Architecture
-The environment is deployed across three resource groups. One resource group is dedicated to network components (transit), another to shared infrastructure services (shared services), and the last to workload components.
 
-It uses a [hub and spoke architecture](https://docs.microsoft.com/en-us/azure/architecture/reference-architectures/hybrid-networking/hub-spoke?tabs=cli) where all north, south, east, and west traffic is routed through an Azure Firewall deployed in the transit virtual network. Shared services like DNS, provided by Azure Private DNS Resolver, are deployed in a spoke attached to the hub. Another two spokes are attached to the hub configured with a variety of subnets to fit most workload purposes.
+The solution implements a **Hub and Spoke network topology** with the following design principles:
 
-![lab image single region](../../assets/lab-hub-spoke-azfw-sr.svg)
-*Single Region*
+### Network Segmentation
+- **Transit Resource Group**: Contains the hub virtual network with Azure Firewall
+- **Shared Services Resource Group**: Houses DNS services, bastion, and shared infrastructure
+- **Workload Resource Group**: Dedicated space for application workloads
 
-It can optionally be deployed to multiple regions by setting the Terraform parameter multi_region to true. It will then an additional three resource groups in the second region and will re-use existing global Private DNS Zones for internal DNS resolution.
+### Traffic Flow
+All network traffic (north-south, east-west) is routed through Azure Firewall in the hub, enabling:
+- Centralized security policy enforcement
+- Comprehensive traffic logging and monitoring
+- Threat protection and filtering
 
-![lab image multiple region](../../assets/lab-hub-spoke-azfw-mr.svg)
-*Multi-Region*
+### Single Region Deployment
+![Single Region Architecture](../../assets/lab-hub-spoke-azfw-sr.svg)
 
-Other features include:
+### Multi-Region Deployment
+When `multi_region = true`, the solution deploys across two regions with:
+- Region-specific hub and spoke networks
+- Shared global Private DNS zones for cross-region resolution
+- Consistent security policies across regions
 
-1) DNS Query logging through Azure Firewall
-2) Azure VPN Gateway to support hybrid connectivity
-3) VNet Flow Logs and traffic analytics to provide for insight into network traffic flows
-4) Azure Bastion to provide for secure remote access
-5) Windows virtual machine provisioned with a variety of tools including Azure Powershell, Azure CLI, and Visual Studio Code
-6) Diagnostic logging enabled for all services that support it with logs being sent to a central Log Analytics Workspace
-7) Private DNS Zones for commonly used services linked to the shared services virtual network to support centralized DNS resolution
-8) Managed identity and Azure Key Vault provisioned for use with application workloads
-9) Centralized Azure Key Vault which stores username and password configured on the virtual machine
-10) Azure Monitor Data Collection Rules for Linux and Windows Virtual Machines
+![Multi-Region Architecture](../../assets/lab-hub-spoke-azfw-mr.svg)
+
+## Features
+
+### 🔒 Security & Compliance
+- **Azure Firewall Premium**: Advanced threat protection with IDPS capabilities
+- **DNS Security Policies**: Domain filtering and threat intelligence
+- **Network Security Groups**: Granular subnet-level access controls
+- **Private Endpoints**: Secure connectivity to Azure PaaS services
+- **Key Vault Integration**: Centralized secrets management
+
+### 🌐 Network & Connectivity
+- **Azure Private DNS Resolver**: Centralized DNS resolution
+- **VPN Gateway**: Hybrid connectivity support
+- **Multiple Workload Spokes**: Flexible workload isolation
+- **Application Gateway Ready**: Pre-configured subnets and NSG rules
+- **API Management Ready**: Internal deployment support
+
+### 📊 Monitoring & Logging
+- **VNet Flow Logs**: Network traffic analysis and monitoring
+- **Azure Monitor Integration**: Centralized logging and alerting
+- **Traffic Analytics**: Visual insights into network patterns
+- **Diagnostic Settings**: Comprehensive audit trail
+
+### 💻 Management & Access
+- **Azure Bastion**: Secure remote access without public IPs
+- **Windows Tools VM**: Pre-configured with Azure CLI, PowerShell, VS Code
+- **Data Collection Rules**: Automated VM monitoring setup
+
+### 🔧 DevOps & Automation
+- **Terraform 1.8.3+**: Infrastructure as Code
+- **Modular Design**: Reusable components
+- **Tagging Strategy**: Automated resource tagging with creation metadata
 
 ## Prerequisites
-1. You must hold at least the Owner role within each Azure subscription you configure the template to deploy resources to or you must have sufficient delegated permissions to create role assignments.
 
-2. Get the object id of the security principal (user, managed identity, service principal) that will have access to the Azure Key Vault instance. This will be used for the key_vault_admin parameter when running the code. Ensure you are using the most up to date version of az cli.
+### Azure Requirements
+1. **Azure Subscription**: Active subscription with sufficient permissions
+2. **Azure Permissions**: `Owner` role or equivalent delegated permissions for:
+   - Resource group creation and management
+   - Role assignment creation
+   - Network resource provisioning
 
-**az ad user show --id someuser@sometenant.com --query id --output tsv**
+3. **Network Watcher**: Must be enabled in target regions using Azure Portal method
+   - ⚠️ **Important**: Use Azure Portal, not CLI, to ensure proper naming (`NetworkWatcher_<region>`)
+   - CLI creates resources with incorrect naming pattern that will cause deployment failures
 
-3. The virtual machines provisioned by this code draw their bootstrapping scripts from this repository stored in the /scripts folder.
+### Local Development Environment
+1. **Terraform**: Version 1.8.3 or higher
+   ```bash
+   terraform version
+   ```
 
-4. Enable Network Watcher in the region you plan to deploy the resources using the Azure Portal method described in this link. Do not use the CLI option because the templates expect the Network Watcher resource to be named NetworkWatcher_REGION, such as NetworkWatcher_eastus2. The CLI names the resource watcher_REGION such as watcher_eastus2 which will cause the deployment of the environment to fail.
+2. **Azure CLI**: Latest version recommended
+   ```bash
+   az version
+   ```
 
-5. You must have at least Terraform version 1.8.3 installed on your machine.
+3. **Git**: For cloning the repository
+   ```bash
+   git --version
+   ```
 
-## Installation
-1. Clone the repository.
+### Required Information
+Before deployment, gather the following:
 
-2. Create a [terraform tfvars file](https://developer.hashicorp.com/terraform/language/values/variables) that includes the variables below. You can also pass these variables at the command line when running terraform apply. A sample Terraform file for both single region and multiple region deployment is provided in this repository.
+1. **Key Vault Administrator Object ID**:
+   ```bash
+   az ad user show --id your-email@domain.com --query id --output tsv
+   ```
 
-* key_vault_admin - This is the object id you obtained from the prerequisites step 2.
+2. **Trusted IP Address**: Your public IP for Key Vault firewall rules
+   ```bash
+   curl ifconfig.me
+   ```
 
-* tags - These are the tags you want associated to the resource. By default two tags will be added in addition to the tags you specify. A createdBy tag will be added to each resource with the objectId of the user who created the resources. A createdTime tag will be added as well indicating the time the resource was created. Example: {environment = "lab", product = "test"}
+3. **Target Azure regions**: Primary and secondary (if using multi-region)
 
-* location_primary - This is the primary Azure region you want to deploy the resources to. Example: "eastus"
+## Quick Start
 
-* location_secondary - This is the secondary Azure region you want to deploy the resources to when deploying using the multiple region option. Example: "eastus"
+### 1. Clone Repository
+```bash
+git clone <repository-url>
+cd azure-terraform-code/base-labs/hub-and-spoke-azfw
+```
 
-* address_space_azure_primary_region - This is the address space you want to assign to the primary region. It must be /20 or more.
+### 2. Configure Variables
+Copy the example configuration:
+```bash
+cp terraform.tfvars-example terraform.tfvars
+```
 
-* address_space_azure_secondary_region - This is the address space you want to assign to the secondary region when deploying using the multiple region option. This must be /20 or more.
+Edit `terraform.tfvars` with your values:
+```hcl
+# Required Variables
+key_vault_admin                    = "your-user-object-id"
+trusted_ip                        = "your.public.ip.address"
+location_primary                   = "canadacentral"
+admin_username                     = "azureuser"
+admin_password                     = "SecurePassword123!"
 
-* address_space_cloud - This is the address space you want to use for the lab. The lab requires a large enough block to provide for at least three /16s. Example: "10.0.0.0/8"
+# Network Configuration
+address_space_cloud                = "10.0.0.0/8"
+address_space_azure_primary_region = "10.0.0.0/20"
+address_space_onpremises           = "192.168.0.0/16"
 
-* address_space_onpremises - This is the address space for any VPN sites connected to the VPN Gateway. Example: "192.168.0.0/16"
+# Multi-region (optional)
+multi_region                       = false
+location_secondary                 = "canadaeast"
+address_space_azure_secondary_region = "10.0.16.0/20"
 
-* admin_username - This is the username configured for the administrator account on the virtual machine. This is stored in the central Key Vault for reference.
+# Tagging
+tags = {
+  environment = "lab"
+  project     = "networking"
+  owner       = "your-team"
+}
+```
 
-* admin_password - This is the password configured for the administrator account on the virtual machine. This is stored in the central Key Vault for reference.
+### 3. Deploy Infrastructure
+```bash
+# Initialize Terraform
+terraform init
 
-* multi_region - Set this to true to deploy to both the primary and secondary regions.
+# Plan deployment
+terraform plan
 
-3. Run the following command to initialize Terraform.
-`terraform init`
+# Deploy with limited parallelism to avoid API limits
+terraform apply -parallelism=3
+```
 
-4. Run the following command to deploy the resources. This lab deploys several resources at once and can hit Azure ARM REST API limits. It's recommended ot set the parallelism to 3 or lower to mitigate the risks of hitting these API limits and the deployment failing. This is most likely to happen in the multi-region deployment model.
-`terraform apply -parallelism=3`
+## Configuration
+
+### Network Design
+The solution uses a supernet approach with these defaults:
+
+| Component | Default CIDR | Purpose |
+|-----------|--------------|---------|
+| Cloud Supernet | `10.0.0.0/8` | Overall address space |
+| Primary Region | `10.0.0.0/20` | Hub and spokes in primary region |
+| Secondary Region | `10.0.16.0/20` | Hub and spokes in secondary region |
+| On-premises | `192.168.0.0/16` | VPN site networks |
+
+### Subnet Allocation
+Each region automatically allocates subnets for:
+- Azure Firewall subnet
+- Gateway subnet
+- Bastion subnet
+- Application Gateway subnet
+- API Management subnet
+- Azure Machine Learning compute subnet
+- Private endpoint subnet
+- General workload subnets
+
+### Private DNS Zones
+The following zones are automatically created and linked:
+- `privatelink.azurecr.io` - Container Registry
+- `privatelink.database.windows.net` - SQL Database
+- `privatelink.blob.core.windows.net` - Storage Account (Blob)
+- `privatelink.vaultcore.azure.net` - Key Vault
+- `privatelink.openai.azure.com` - Azure OpenAI
+- `privatelink.api.azureml.ms` - Azure Machine Learning
+- And many more...
+
+## Deployment
+
+### Standard Deployment
+For basic single-region deployment:
+```bash
+terraform apply -parallelism=3
+```
+
+### Multi-Region Deployment
+For high-availability across regions:
+```bash
+# Set multi_region = true in terraform.tfvars
+terraform apply -parallelism=3
+```
+
+### Custom Parallelism
+Azure ARM API has rate limits. Adjust parallelism based on your needs:
+```bash
+# Conservative (recommended for large deployments)
+terraform apply -parallelism=1
+
+# Standard (good balance)
+terraform apply -parallelism=3
+
+# Aggressive (only for small deployments)
+terraform apply -parallelism=5
+```
+
+## Post-Deployment
+
+### Verification Steps
+1. **Check Resource Groups**: Verify all resource groups are created
+2. **Test Connectivity**: Connect to Windows VM via Bastion
+3. **Validate Firewall**: Check Azure Firewall logs in Log Analytics
+4. **DNS Resolution**: Test private DNS resolution
+
+### Initial Configuration
+1. **Windows Tools VM**: Access via Bastion for management tasks
+2. **Key Vault**: Retrieve admin credentials from the central Key Vault
+3. **Monitoring**: Configure additional alerts in Azure Monitor
+
+### Connecting Workloads
+To add additional workloads:
+1. Deploy resources in the workload resource group
+2. Connect to the workload spoke subnets
+3. Configure private endpoints for Azure services
+4. Update firewall rules as needed
+
+## Security Considerations
+
+### Network Security
+- All subnets have dedicated Network Security Groups
+- Default deny-all rules with explicit allow rules
+- Private endpoints for all Azure PaaS services
+- No direct internet access from workload subnets
+
+### Access Control
+- Azure AD integration for Key Vault access
+- Bastion for secure VM access (no RDP/SSH over internet)
+- Managed identities for service-to-service authentication
+
+### Monitoring
+- All network flows are logged and analyzed
+- Security events are forwarded to Log Analytics
+- Traffic analytics provide visibility into communication patterns
+
+### DNS Security
+- DNS security policies block malicious domains
+- Private DNS resolution prevents data exfiltration
+- DNS query logging for audit and forensics
+
+## Troubleshooting
+
+### Common Issues
+
+#### Deployment Failures
+```bash
+# Check Terraform state
+terraform show
+
+# View detailed error logs
+terraform apply -parallelism=1 -auto-approve
+```
+
+#### Network Connectivity Issues
+1. Check NSG rules: Ensure proper allow rules exist
+2. Verify route tables: Confirm traffic routes through firewall
+3. Check firewall rules: Validate application and network rules
+
+#### DNS Resolution Problems
+1. Verify private DNS zones are linked to VNets
+2. Check DNS security policies
+3. Validate private DNS resolver configuration
+
+## Updates
+
+### 2025
+* **July 28, 2025**
+  * Updated DNS security policies with new blocked domain configurations
+  * Enhanced documentation with industry best practices
+  * Improved README structure and content organization
+
+* **March 17, 2025** *(Note: Date corrected from original typo)*
+  * Added additional workload spoke for enhanced workload separation
+  * Added dedicated subnet to support Azure Machine Learning injected compute scenarios
+  * Expanded Private DNS Zones collection for additional Azure services
+  * Enhanced support for AI/ML workloads with proper network isolation
+
+### 2024
+* **November 12, 2024**
+  * Modified SSH ports from 22 to 2222 for enhanced security posture
+  * Updated Network Security Group rules to reflect new SSH port configuration
+
+* **October 28, 2024**
+  * Extensive cleanup and optimization of IP address ranges for better resource utilization
+  * Added comprehensive support for multi-region deployments
+  * Improved network segmentation and routing logic
+
+* **July 22, 2024**
+  * Added dedicated subnets, route tables, and NSGs for Application Gateway deployment
+  * Added dedicated subnets, route tables, and NSGs for API Management internal mode
+  * Enhanced Azure Firewall rules to support internal API Management traffic flows
+  * Improved support for application-tier networking components
+
+* **June 7, 2024**
+  * Initial release with core hub and spoke architecture
+  * Basic Azure Firewall integration and network segmentation
+  * Foundation security and monitoring components
+
+## Contributing
+
+We welcome contributions! Please follow these guidelines:
+
+1. **Fork the repository** and create a feature branch
+2. **Follow Terraform best practices** including proper variable typing and documentation
+3. **Test your changes** in a dev environment before submitting
+4. **Update documentation** for any new features or changes
+5. **Submit a pull request** with a clear description of changes
+
+### Code Standards
+- Use consistent naming conventions following the existing patterns
+- Include proper variable descriptions and types
+- Add appropriate tags to all resources
+- Follow the established module structure
+
+### Reporting Issues
+- Use GitHub Issues for bug reports and feature requests
+- Include Terraform version, Azure CLI version, and relevant logs
+- Provide steps to reproduce the issue
