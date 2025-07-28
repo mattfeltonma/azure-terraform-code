@@ -25,7 +25,7 @@ resource "azapi_resource" "domain_list_blocked" {
   body = {
     properties = {
       domains = [
-        "homersimpson.com"
+        "fark.com"
       ]
     }
     tags = var.tags
