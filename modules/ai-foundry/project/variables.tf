@@ -13,37 +13,37 @@ variable "aisearch_resource_id" {
   type        = string
 }
 
-#variable "application_insights_connection_string" {
-#  description = "The connection string of the Application Insights instance that will be used to store trace data"
-#  type        = string
-#  sensitive = true
-#}
+variable "application_insights_connection_string" {
+  description = "The connection string of the Application Insights instance that will be used to store trace data"
+  type        = string
+  sensitive = true
+}
 
-#variable "application_insights_name" {
-#  description = "The resource name of the Application Insights instance that will be used to store trace data"
-#  type        = string
-#}
+variable "application_insights_name" {
+  description = "The resource name of the Application Insights instance that will be used to store trace data"
+  type        = string
+}
 
-#variable "application_insights_resource_id" {
-#  description = "The resource id of the Application Insights instance that will be used to store trace data"
-#  type        = string
-#}
+variable "application_insights_resource_id" {
+  description = "The resource id of the Application Insights instance that will be used to store trace data"
+  type        = string
+}
 
-#variable "bing_grounding_search_name" {
-#  description = "The resource name of the Bing Search instance that will be used for grounding search"
-#  type        = string
-#}
+variable "bing_grounding_search_name" {
+  description = "The resource name of the Bing Search instance that will be used for grounding search"
+  type        = string
+}
 
-#variable "bing_grounding_search_resource_id" {
-#  description = "The resource id of the Bing Search instance that will be used for grounding search"
-#  type        = string
-#}
+variable "bing_grounding_search_resource_id" {
+  description = "The resource id of the Bing Search instance that will be used for grounding search"
+  type        = string
+}
 
-#variable "bing_grounding_search_subscription_key" {
-#  description = "The subscription key for the Bing Search instance that will be used for grounding search"
-#  type        = string
-#  sensitive = true
-#}
+variable "bing_grounding_search_subscription_key" {
+  description = "The subscription key for the Bing Search instance that will be used for grounding search"
+  type        = string
+  sensitive = true
+}
 
 variable "cosmosdb_document_endpoint" {
   description = "The CosmosDB document endpoint the agent will store conversation history in"

@@ -10,6 +10,16 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.26.0"
     }
+
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6.0"
+    }
+
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.2.0"
+    }
   }
   required_version = ">= 1.8.3"
   # Uncomment to store state in Azure Storage

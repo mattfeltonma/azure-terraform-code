@@ -62,6 +62,14 @@ locals {
     null
   ) : null
 
+  # Define this variable to hold the region names when multi-region is enabled
+  regions = var.multi_region ? {
+    primary   = var.location_primary
+    secondary = var.location_secondary
+  } : {
+    primary = var.location_primary
+  }
+
   # Naming conventions
   route_prefix = "udr"
 
