@@ -343,24 +343,3 @@ terraform apply -parallelism=1 -auto-approve
   * Initial release with core hub and spoke architecture
   * Basic Azure Firewall integration and network segmentation
   * Foundation security and monitoring components
-
-## Contributing
-
-We welcome contributions! Please follow these guidelines:
-
-1. **Fork the repository** and create a feature branch
-2. **Follow Terraform best practices** including proper variable typing and documentation
-3. **Test your changes** in a dev environment before submitting
-4. **Update documentation** for any new features or changes
-5. **Submit a pull request** with a clear description of changes
-
-### Code Standards
-- Use consistent naming conventions following the existing patterns
-- Include proper variable descriptions and types
-- Add appropriate tags to all resources
-- Follow the established module structure
-
-### Reporting Issues
-- Use GitHub Issues for bug reports and feature requests
-- Include Terraform version, Azure CLI version, and relevant logs
-- Provide steps to reproduce the issue

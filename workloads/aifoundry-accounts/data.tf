@@ -3,6 +3,8 @@ data "azurerm_subscription" "current" {}
 
 data "azurerm_client_config" "identity_config" { }
 
+data "azurerm_client_config" "current" {}
+
 # Get the keys returned from the Bing Search resource
 data "azapi_resource_action" "bing_api_keys" {
     depends_on = [ 

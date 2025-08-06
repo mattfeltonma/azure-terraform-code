@@ -200,7 +200,6 @@ module "shared_vnet" {
   tags = local.tags
 }
 
-
 ## Create Private DNS Zones and Virtual Network Links
 ##
 module "private_dns_zones" {
@@ -395,6 +394,7 @@ resource "null_resource" "update_firewall_dns_policy" {
 
   depends_on = [module.private_dns_zones]
   
+  # Trigger only if Azure Firewall Policy changes or if DNS resolver IP changes
   triggers = {
     firewall_policy_id = module.transit_vnet[each.key].policy_id
     dns_resolver_ip    = module.shared_vnet[each.key].private_resolver_inbound_endpoint_ip
@@ -413,3 +413,58 @@ resource "azurerm_virtual_network_dns_servers" "dns_servers" {
   virtual_network_id = module.transit_vnet[each.key].id
   dns_servers        = [module.transit_vnet[each.key].azfw_private_ip]
 }
+
+## Create VNet peering between transit virtual networks when multi-region is enabled
+##
+resource "azurerm_virtual_network_peering" "transit_peering" {
+  count = var.multi_region == true ? 2 : 0
+
+  depends_on = [
+    module.workload_vnet_1,
+    module.workload_vnet_2
+  ]
+
+  # Use count to create both directions of peering
+  name                = count.index == 0 ? "peer-secondary-to-primary" : "peer-primary-to-secondary"
+  resource_group_name = count.index == 0 ? azurerm_resource_group.rgtran["secondary"].name : azurerm_resource_group.rgtran["primary"].name
+  virtual_network_name = count.index == 0 ? module.transit_vnet["secondary"].name : module.transit_vnet["primary"].name
+  remote_virtual_network_id = count.index == 0 ? module.transit_vnet["primary"].id : module.transit_vnet["secondary"].id
+  
+  allow_virtual_network_access = true
+  allow_forwarded_traffic      = true
+  allow_gateway_transit        = false
+  use_remote_gateways          = false
+}
+
+## Create cross-region routes when multi-region is enabled
+##
+resource "azurerm_route" "routes_to_secondary" {
+  depends_on = [
+    azurerm_virtual_network_peering.transit_peering
+  ]
+
+  for_each = var.multi_region == true ? local.secondary_region_vnet_cidrs : {}
+
+  name                   = "${local.route_prefix}${each.key}${local.location_code_secondary}"
+  resource_group_name    = azurerm_resource_group.rgtran["primary"].name
+  route_table_name       = module.transit_vnet["primary"].route_table_name_azfw
+  address_prefix         = each.value
+  next_hop_type          = "VirtualAppliance"
+  next_hop_in_ip_address = module.transit_vnet["secondary"].azfw_private_ip
+}
+
+resource "azurerm_route" "routes_to_primary" {
+  depends_on = [
+    azurerm_virtual_network_peering.transit_peering
+  ]
+
+  for_each = var.multi_region == true ? local.primary_region_vnet_cidrs : {}
+
+  name                   = "${local.route_prefix}${each.key}${local.location_code_primary}"
+  resource_group_name    = azurerm_resource_group.rgtran["secondary"].name
+  route_table_name       = module.transit_vnet["secondary"].route_table_name_azfw
+  address_prefix         = each.value
+  next_hop_type          = "VirtualAppliance"
+  next_hop_in_ip_address = module.transit_vnet["primary"].azfw_private_ip
+}
+

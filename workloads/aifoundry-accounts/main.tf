@@ -1,12 +1,22 @@
-##### Create general resources
-#####
+########## Create resource group and Log Analytics Workspace
+##########
+
+## Create resource group the resources in this deployment will be deployed to
+##
+resource "azurerm_resource_group" "rg_work" {
+
+  name     = "rgaif${var.location_code}${var.random_string}"
+  location = var.location
+
+  tags = var.tags
+}
 
 ## Create a Log Analytics Workspace that all resources specific to this workload will
 ## write configured resource logs and metrics to
 resource "azurerm_log_analytics_workspace" "log_analytics_workspace" {
   name                = "law${var.purpose}${var.location_code}${var.random_string}"
   location            = var.location
-  resource_group_name = var.workload_vnet_resource_group_name
+  resource_group_name = azurerm_resource_group.rg_work.name
 
   sku               = "PerGB2018"
   retention_in_days = 30
@@ -38,15 +48,139 @@ resource "azurerm_monitor_diagnostic_setting" "diag_log_analytics_workspace" {
   }
 }
 
-##### Create AI Foundry resource with support for VNet injection
-#####
+########## Create an Azure Key Vault instance and a key if customer-managed key encryption is specified
+##########
+##########
 
-## Create the Azure Foundry resource
+## Create the Azure Key Vault instance which will be used to store the key to support CMK encryption of the AI Foundry account
+##
+module "keyvault_aifoundry_cmk" {
+  count = var.encryption == "cmk" ? 1 : 0
+
+  source              = "../../modules/key-vault"
+  random_string       = var.random_string
+  location            = var.location
+  location_code       = var.location_code
+  resource_group_name = azurerm_resource_group.rg_work.name
+  purpose             = var.purpose
+  tags                = var.tags
+
+  # Resource logs for the Key Vault will be sent to this Log Analytics Workspace
+  law_resource_id = azurerm_log_analytics_workspace.log_analytics_workspace.id
+
+  # Enable RBAC authorization on the Key Vault
+  rbac_enabled = true
+
+  # The user specified here will have the Azure RBAC Key Vault Administrator role over the Azure Key Vault instance
+  kv_admin_object_id = var.user_object_id
+
+  # Disable public access and allow the Trusted Azure Service firewall exception
+  firewall_default_action = "Deny"
+  firewall_bypass         = "AzureServices"
+
+  # Enable purge protection and soft delete to support the usage of CMK
+  purge_protection           = true
+  soft_delete_retention_days = 7
+
+  # Allow the trusted IP where the Terraform is being deployed from access to the vault
+  firewall_ip_rules = [
+    var.trusted_ip
+  ]
+}
+
+## Create the CMK used to encrypt the Azure Foundry account
+##
+resource "azurerm_key_vault_key" "key_cmk_foundry" {
+  count = var.encryption == "cmk" ? 1 : 0
+
+  depends_on = [
+    module.keyvault_aifoundry_cmk
+  ]
+
+  name         = "cmk-foundry"
+  key_vault_id = module.keyvault_aifoundry_cmk[0].id
+  key_type     = "RSA"
+
+  key_size = 2048
+  key_opts = ["decrypt", "encrypt", "sign", "unwrapKey", "verify", "wrapKey"]
+}
+
+########## Create the user-assigned managed identity for the AI Foundry account and the the necessary role assignments. 
+########## This section is only executed if the user specifies that a user-assigned managed identity should be created
+########## using the user_assigne_managed_identity variable
+
+## Create the user-assigned managed identity for the AI Foundry account
+##
+resource "azurerm_user_assigned_identity" "umi_foundry" {
+  count = var.managed_identity == "user_assigned" ? 1 : 0
+
+  depends_on = [
+    azurerm_resource_group.rg_work,
+    module.keyvault_aifoundry_cmk,
+    azurerm_key_vault_key.key_cmk_foundry
+  ]
+
+  name                = "${local.umi_prefix}${var.purpose}${var.location_code}${var.random_string}"
+  resource_group_name = azurerm_resource_group.rg_work.name
+  location            = var.location
+
+  tags = var.tags
+}
+
+## Pause for 10 seconds to allow the managed identity that was created to be replicated
+##
+resource "time_sleep" "wait_umi_foundry_creation" {
+  count = var.managed_identity == "user_assigned" ? 1 : 0
+
+  depends_on = [
+    azurerm_user_assigned_identity.umi_foundry
+  ]
+  create_duration = "10s"
+}
+
+## Create an Azure RBAC role assignment for the Key Vault Crypto User role on the Key Vault used for the CMK
+## assigned to the AI Foundry account user-assigned managed identity
+## Note this is not yet supported as of August 5th 2025
+resource "azurerm_role_assignment" "umi_foundry_kv_cryto_user" {
+  count = local.cmk_umi == true ? 1 : 0
+
+  depends_on = [
+    time_sleep.wait_umi_foundry_creation
+  ]
+
+  name                 = uuidv5("dns", "${azurerm_resource_group.rg_work.name}${module.keyvault_aifoundry_cmk[0].name}${azurerm_user_assigned_identity.umi_foundry[0].name}kvcryptouser")
+  scope                = module.keyvault_aifoundry_cmk[0].id
+  role_definition_name = "Key Vault Crypto User"
+  principal_id         = azurerm_user_assigned_identity.umi_foundry[0].principal_id
+}
+
+## Pause for 120 seconds to allow the role assignments to be replicated
+##
+resource "time_sleep" "wait_umi_role_assignments" {
+  count = local.cmk_umi == true ? 1 : 0
+
+  depends_on = [
+    azurerm_role_assignment.umi_foundry_kv_cryto_user
+  ]
+  create_duration = "120s"
+}
+
+########## Create AI Foundry account with support for VNet injection
+##########
+
+## Create the Azure Foundry account
 ##
 resource "azapi_resource" "ai_foundry_resource" {
+  depends_on = [
+    azurerm_resource_group.rg_work,
+    module.keyvault_aifoundry_cmk,
+    azurerm_key_vault_key.key_cmk_foundry,
+    time_sleep.wait_umi_role_assignments
+  ]
+
   type                      = "Microsoft.CognitiveServices/accounts@2025-04-01-preview"
-  name                      = "aif${var.purpose}${var.location_code}${var.random_string}"
-  parent_id                 = var.workload_vnet_resource_group_id
+  name                      = "aif${var.purpose}${var.location_code}159"
+  parent_id                 = azurerm_resource_group.rg_work.id
   location                  = var.location
   schema_validation_enabled = false
 
@@ -55,20 +189,35 @@ resource "azapi_resource" "ai_foundry_resource" {
     sku = {
       name = "S0"
     }
-    identity = {
+
+    # Assign a user-assigned managed identity or system-assigned managed identity based on the variable specified
+    identity = var.managed_identity == "user_assigned" ? {
+      type = "UserAssigned"
+      userAssignedIdentities = {
+        (azurerm_user_assigned_identity.umi_foundry[0].id) = {}
+      }
+      } : {
       type = "SystemAssigned"
     }
 
     properties = {
 
-      # Support both Entra ID and API Key authentication for underlining Cognitive Services account
-      disableLocalAuth = true
-
       # Specifies that this is an AI Foundry resource which will support AI Foundry projects
       allowProjectManagement = true
 
       # Set custom subdomain name for DNS names created for this Foundry resource
-      customSubDomainName = "aif${var.purpose}${var.location_code}${var.random_string}"
+      customSubDomainName = "aif${var.purpose}${var.location_code}159"
+
+      # Set encryption settings based on whether PMK or CMK is specified
+      encryption = local.cmk_umi == true ? {
+        keySource = "Microsoft.KeyVault"
+        keyVaultProperties = {
+          keyName          = azurerm_key_vault_key.key_cmk_foundry[0].name
+          keyVersion       = azurerm_key_vault_key.key_cmk_foundry[0].version
+          keyVaultUri      = module.keyvault_aifoundry_cmk[0].vault_uri
+          identityClientId = azurerm_user_assigned_identity.umi_foundry[0].client_id
+        }
+      } : null
 
       # Network-related controls
       # Disable public access but allow Trusted Azure Services exception
@@ -103,11 +252,49 @@ resource "azapi_resource" "ai_foundry_resource" {
   }
 }
 
-## Create a deployment for OpenAI's GPT-4o
+## Create an Azure RBAC role assignment for the Key Vault Crypto User role on the Key Vault used for the CMK
+## assigned to the AI Foundry account system-assigned managed identity
+resource "azurerm_role_assignment" "smi_foundry_kv_cryto_user" {
+  count = local.cmk_smi == true ? 1 : 0
+
+  depends_on = [
+    azapi_resource.ai_foundry_resource
+  ]
+
+  name                 = uuidv5("dns", "${azurerm_resource_group.rg_work.name}${module.keyvault_aifoundry_cmk[0].name}${azapi_resource.ai_foundry_resource.name}kvcryptouser")
+  scope                = module.keyvault_aifoundry_cmk[0].id
+  role_definition_name = "Key Vault Crypto User"
+  principal_id         = azapi_resource.ai_foundry_resource.output.identity.principalId
+}
+
+resource "time_sleep" "wait_smi_role_assignments" {
+  count = local.cmk_umi == true ? 1 : 0
+
+  depends_on = [
+    azurerm_role_assignment.smi_foundry_kv_cryto_user
+  ]
+  create_duration = "120s"
+}
+
+## Modify the Azure AI Foundry account to use a CMK if CMK is specified and a system-assigned managed identity is being used
+##
+resource "azurerm_cognitive_account_customer_managed_key" "ai_foundry_cmk" {
+  count = local.cmk_smi == true ? 1 : 0
+
+  depends_on = [
+    time_sleep.wait_smi_role_assignments
+  ]
+
+  cognitive_account_id = azapi_resource.ai_foundry_resource.id
+  key_vault_key_id = azurerm_key_vault_key.key_cmk_foundry[0].id
+}
+
+# Create a deployment for OpenAI's GPT-4o
 ##
 resource "azurerm_cognitive_deployment" "openai_deployment_gpt_4o" {
   depends_on = [
-    azapi_resource.ai_foundry_resource
+    azapi_resource.ai_foundry_resource,
+    azurerm_cognitive_account_customer_managed_key.ai_foundry_cmk
   ]
 
   name                 = "gpt-4o"
@@ -115,7 +302,7 @@ resource "azurerm_cognitive_deployment" "openai_deployment_gpt_4o" {
 
   sku {
     name     = "DataZoneStandard"
-    capacity = 100
+    capacity = 300
   }
 
   model {
@@ -128,7 +315,6 @@ resource "azurerm_cognitive_deployment" "openai_deployment_gpt_4o" {
 ##
 resource "azurerm_cognitive_deployment" "openai_deployment_text_embedding_3_large" {
   depends_on = [
-    azapi_resource.ai_foundry_resource,
     azurerm_cognitive_deployment.openai_deployment_gpt_4o
   ]
 
@@ -197,7 +383,7 @@ module "cosmos_db" {
   random_string       = var.random_string
   location            = var.location
   location_code       = var.location_code
-  resource_group_name = var.workload_vnet_resource_group_name
+  resource_group_name = azurerm_resource_group.rg_work.name
   tags                = var.tags
 
   # Resource logs for the Cosmos DB instance will be sent to this Log Analytics Workspace
@@ -215,8 +401,8 @@ module "ai_search" {
   source              = "../../modules/ai-search"
   purpose             = var.purpose
   random_string       = var.random_string
-  resource_group_name = var.workload_vnet_resource_group_name
-  resource_group_id   = var.workload_vnet_resource_group_id
+  resource_group_name = azurerm_resource_group.rg_work.name
+  resource_group_id   = azurerm_resource_group.rg_work.id
   location            = var.location
   location_code       = var.location_code
   tags                = var.tags
@@ -241,7 +427,7 @@ module "storage_account_default" {
   random_string       = var.random_string
   location            = var.location
   location_code       = var.location_code
-  resource_group_name = var.workload_vnet_resource_group_name
+  resource_group_name = azurerm_resource_group.rg_work.name
   tags                = var.tags
 
   # Use LRS replication to minimize costs
@@ -273,7 +459,7 @@ resource "azurerm_application_insights" "appins" {
   ]
   name                = "appinsaif${var.location_code}${var.random_string}"
   location            = var.location
-  resource_group_name = var.workload_vnet_resource_group_name
+  resource_group_name = azurerm_resource_group.rg_work.name
   workspace_id        = azurerm_log_analytics_workspace.log_analytics_workspace.id
   application_type    = "other"
 }
@@ -283,7 +469,7 @@ resource "azurerm_application_insights" "appins" {
 resource "azapi_resource" "bing_grounding_search" {
   type                      = "Microsoft.Bing/accounts@2020-06-10"
   name                      = "bingaif${var.location_code}${var.random_string}"
-  parent_id                 = var.workload_vnet_resource_group_id
+  parent_id                 = azurerm_resource_group.rg_work.id
   location                  = "global"
   schema_validation_enabled = false
 
@@ -309,9 +495,9 @@ module "private_endpoint_ai_foundry" {
 
   source              = "../../modules/private-endpoint"
   random_string       = var.random_string
-  location            = var.workload_vnet_location
-  location_code       = var.workload_vnet_location_code
-  resource_group_name = var.workload_vnet_resource_group_name
+  location            = var.location
+  location_code       = var.location_code
+  resource_group_name = azurerm_resource_group.rg_work.name
   tags                = var.tags
 
   resource_name    = azapi_resource.ai_foundry_resource.name
@@ -335,9 +521,9 @@ module "private_endpoint_cosmos_db" {
 
   source              = "../../modules/private-endpoint"
   random_string       = var.random_string
-  location            = var.workload_vnet_location
-  location_code       = var.workload_vnet_location_code
-  resource_group_name = var.workload_vnet_resource_group_name
+  location            = var.location
+  location_code       = var.location_code
+  resource_group_name = azurerm_resource_group.rg_work.name
   tags                = var.tags
 
   resource_name    = module.cosmos_db.name
@@ -359,9 +545,9 @@ module "private_endpoint_ai_search" {
 
   source              = "../../modules/private-endpoint"
   random_string       = var.random_string
-  location            = var.workload_vnet_location
-  location_code       = var.workload_vnet_location_code
-  resource_group_name = var.workload_vnet_resource_group_name
+  location            = var.location
+  location_code       = var.location_code
+  resource_group_name = azurerm_resource_group.rg_work.name
   tags                = var.tags
 
   resource_name    = module.ai_search.name
@@ -383,9 +569,9 @@ module "private_endpoint_storage_account_default" {
 
   source              = "../../modules/private-endpoint"
   random_string       = var.random_string
-  location            = var.workload_vnet_location
-  location_code       = var.workload_vnet_location_code
-  resource_group_name = var.workload_vnet_resource_group_name
+  location            = var.location
+  location_code       = var.location_code
+  resource_group_name = azurerm_resource_group.rg_work.name
   tags                = var.tags
 
   resource_name    = module.storage_account_default.name
@@ -421,7 +607,8 @@ module "ai_foundry_project_sample" {
     module.private_endpoint_storage_account_default,
     time_sleep.wait_appins,
     azapi_resource.bing_grounding_search,
-    null_resource.add-subnet-delegation
+    null_resource.add-subnet-delegation,
+    azurerm_cognitive_account_customer_managed_key.ai_foundry_cmk
   ]
 
   source              = "../../modules/ai-foundry/project"
@@ -519,4 +706,14 @@ resource "azurerm_role_assignment" "aisearch_user_data_contributor" {
   scope                = module.ai_search.id
   role_definition_name = "Search Index Data Contributor"
   principal_id         = var.user_object_id
+}
+
+## Added AI Foundry account purger to avoid running into InUseSubnetCannotBeDeleted-lock caused by the agent subnet delegation.
+## The azapi_resource_action.purge_ai_foundry (only gets executed during destroy) purges the AI foundry account removing /subnets/snet-agent/serviceAssociationLinks/legionservicelink so the agent subnet can get properly removed.
+
+resource "azapi_resource_action" "purge_ai_foundry" {
+  method      = "DELETE"
+  resource_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.CognitiveServices/locations/${azurerm_resource_group.rg_work.location}/resourceGroups/${azurerm_resource_group.rg_work.name}/deletedAccounts/aifoundry${var.random_string}"
+  type        = "Microsoft.Resources/resourceGroups/deletedAccounts@2021-04-30"
+  when        = "destroy"
 }

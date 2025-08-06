@@ -1,22 +1,12 @@
-##### Create scaffolding
-#####
-
-## Create resource group the resources in this deployment will be deployed to
-##
-resource "azurerm_resource_group" "rgwork" {
-
-  name     = "rgaml${var.location_code}${var.random_string}"
-  location = var.location
-
-  tags = var.tags
-}
- 
+########## Create resource group and Log Analytics Workspace
+##########
+  
 ## Create a Log Analytics Workspace where resources in this deployment will send their diagnostic logs
 ##
 resource "azurerm_log_analytics_workspace" "log_analytics_workspace" {
   name                = "law${var.purpose}${var.location_code}${var.random_string}"
   location            = var.location
-  resource_group_name = azurerm_resource_group.rgwork.name
+  resource_group_name = var.workspace_resource_group_name
 
   sku               = "PerGB2018"
   retention_in_days = 30
@@ -59,7 +49,7 @@ resource "azurerm_application_insights" "aml-appins" {
   ]
   name                = "${local.app_insights_prefix}${var.purpose}${var.location_code}${var.random_string}"
   location            = var.location
-  resource_group_name = azurerm_resource_group.rgwork.name
+  resource_group_name = var.workspace_resource_group_name
   workspace_id        = azurerm_log_analytics_workspace.log_analytics_workspace.id
   application_type    = "other"
 }
@@ -72,58 +62,128 @@ module "container_registry" {
   random_string       = var.random_string
   location            = var.location
   location_code       = var.location_code
-  resource_group_name = azurerm_resource_group.rgwork.name
-  law_resource_id     = azurerm_log_analytics_workspace.log_analytics_workspace.id
+  resource_group_name = var.workspace_resource_group_name
+  tags                = var.tags
 
-  tags = var.tags
-}
-
-## Create storage account which will be default storage account for AML Workspace
-##
-module "storage_account_default" {
-
-  source                   = "../../modules/storage-account"
-  purpose                  = var.purpose
-  random_string            = var.random_string
-  location                 = var.location
-  location_code            = var.location_code
-  resource_group_name = azurerm_resource_group.rgwork.name
-  tags = var.tags
-  
-  # Identity controls
-  key_based_authentication = false
-
-  # Networking controls
-  allow_blob_public_access = false
-  network_access_default = "Deny"
-  network_trusted_services_bypass = [ 
-    "None"
-   ]
-  resource_access = [
-    {
-      endpoint_resource_id = "/subscriptions/${var.sub_id}/resourcegroups/*/providers/Microsoft.MachineLearningServices/workspaces/*"
-    }
-  ]
+  # Resource logs for the Container Registry will be sent to this Log Analytics Workspace
   law_resource_id = azurerm_log_analytics_workspace.log_analytics_workspace.id
+
+  # Module has incoming public access disabled by default with trusted Azure Services bypass
+  default_network_action = "Deny"
+  bypass_network_rules   = "AzureServices"
 }
 
-## Create Key Vault which will hold secrets for the AML workspace and assign user the Key Vault Administrator role over it
-##
-module "keyvault_aml" {
+# Create storage account which will be used as the default storage account for the AML workspace. The storage account will block public access
+# and use resource access rules to allow the AML hub and projects. Key-based authentication will be disabled to enforce Entra ID authentication
+# and Azure RBAC authorization. Key-based authentication will be disabled to enforce Entra ID authentication and Azure RBAC authorization.
+module "storage_account_aml" {
 
-  source              = "../../modules/key-vault"
+  source              = "../../modules/storage-account"
+  purpose             = var.purpose
   random_string       = var.random_string
   location            = var.location
   location_code       = var.location_code
-  resource_group_name = azurerm_resource_group.rgwork.name
-  purpose             = var.purpose
-  law_resource_id     = azurerm_log_analytics_workspace.log_analytics_workspace.id
+  resource_group_name = var.workspace_resource_group_name
   tags                = var.tags
 
-  kv_admin_object_id = var.user_object_id
+  # Resource logs for all endpoints the storage account will be sent to this Log Analytics Workspace
+  law_resource_id = azurerm_log_analytics_workspace.log_analytics_workspace.id
 
-  firewall_default_action = "Deny"
-  firewall_bypass         = "AzureServices"
+  # Disable storage access keys
+  key_based_authentication = false
+
+  # Block public access and use resource rules to allow the AI Foundry Hub and projects to access the storage account through the Microsoft public backbone 
+  # using a managed identity.
+  network_access_default = "Deny"
+  resource_access = [
+    {
+      endpoint_resource_id = "/subscriptions/${var.sub_id_dns}/resourcegroups/*/providers/Microsoft.MachineLearningServices/workspaces/*"
+    }
+  ]
+}
+
+# Create Key Vault which will hold secrets for the AML workspace. Public access will be disabled with the Trusted Services Exception to allow
+# the AI Foundry instance to access the Key Vault for retrieval of secrets.
+#
+resource "azurerm_key_vault" "kv" {
+  name                = "kv${var.purpose}${var.location_code}${var.random_string}"
+  location            = var.location
+  resource_group_name = var.workspace_resource_group_name
+
+  sku_name  = local.sku_name
+  tenant_id = data.azurerm_subscription.current.tenant_id
+
+  enabled_for_deployment          = local.deployment_vm
+  enabled_for_template_deployment = local.deployment_template
+  enable_rbac_authorization       = true
+
+  enabled_for_disk_encryption = false
+  soft_delete_retention_days  = 7
+  purge_protection_enabled    = false
+
+  network_acls {
+    default_action = "Deny"
+    bypass         = "AzureServices"
+  }
+  tags = var.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["created_date"],
+      tags["created_by"]
+    ]
+  }
+}
+
+resource "azurerm_monitor_diagnostic_setting" "diag-base" {
+  depends_on = [ 
+    azurerm_key_vault.kv
+  ]
+
+  name                       = "diag-base"
+  target_resource_id         = azurerm_key_vault.kv.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.log_analytics_workspace.id
+
+  enabled_log {
+    category = "AuditEvent"
+  }
+
+  enabled_log {
+    category = "AzurePolicyEvaluationDetails"
+  }
+}
+
+########## Create the user-assigned managed identity for the AML workspace and the the necessary role assignments. 
+########## This section is only executed if the user specifies that a user-assigned managed identity should be created
+########## using the user_assigne_managed_identity variable
+
+# Create the user-assigned managed identity for the AML workspace
+#
+resource "azurerm_user_assigned_identity" "umi_aml" {
+  count = var.managed_identity == "user_assigned" ? 1 : 0
+
+  depends_on = [
+    azurerm_application_insights.aml-appins,
+    module.storage_account_aml,
+    azurerm_key_vault.kv
+  ]
+
+  name                = "${local.umi_prefix}${var.purpose}${var.location_code}${var.random_string}"
+  resource_group_name = var.workspace_resource_group_name
+  location            = var.location
+
+  tags = var.tags
+}
+ 
+# Pause for 10 seconds to allow the managed identity that was created to be replicated
+#
+resource "time_sleep" "wait_umi_aml_creation" {
+  count = var.managed_identity == "user_assigned" ? 1 : 0
+
+  depends_on = [
+    azurerm_user_assigned_identity.umi_aml[0]
+  ]
+  create_duration = "10s"
 }
 
 ##### Create the Azure Machine Learning Workspace and its child resources
@@ -133,24 +193,30 @@ module "keyvault_aml" {
 ##
 resource "azapi_resource" "aml_workspace" {
   depends_on = [
-    azurerm_resource_group.rgwork,
     azurerm_application_insights.aml-appins,
-    module.storage_account_default,
-    module.keyvault_aml,
-    module.container_registry
+    module.storage_account_aml,
+    azurerm_key_vault.kv,
+    module.container_registry,
+    time_sleep.wait_umi_aml_creation
   ]
 
-  type                      = "Microsoft.MachineLearningServices/workspaces@2025-04-01-preview"
+  type                      = "Microsoft.MachineLearningServices/workspaces@2025-06-01"
   name                      = "${local.aml_workspace_prefix}${var.purpose}${var.location_code}${var.random_string}"
-  parent_id                 = azurerm_resource_group.rgwork.id
+  parent_id                 = var.workspace_resource_group_id
   location                  = var.location
   schema_validation_enabled = false
 
   body = {
 
-    # Create the AML Workspace with a system-assigned managed identity
-    identity = {
+    # Set the hub to use a user-assigned managed identity if specified, otherwise use a system-assigned managed identity
+    identity = var.managed_identity == "user_assigned" ? {
+      type = "UserAssigned"
+      userAssignedIdentities = {
+        "${azurerm_user_assigned_identity.umi_aml[0].id}" = {}
+      }
+      } : {
       type = "SystemAssigned"
+      userAssignedIdentities = {}
     }
 
     # Create a non hub-based AML workspace
@@ -164,8 +230,8 @@ resource "azapi_resource" "aml_workspace" {
 
       # The resources that will be associated with the AML Workspace
       applicationInsights = azurerm_application_insights.aml-appins.id
-      keyVault            = module.keyvault_aml.id
-      storageAccount      = module.storage_account_default.id
+      keyVault            = azurerm_key_vault.kv.id
+      storageAccount      = module.storage_account_aml.id
       containerRegistry   = module.container_registry.id
 
       # Block access to the AML Workspace over the public endpoint
@@ -180,6 +246,15 @@ resource "azapi_resource" "aml_workspace" {
 
         # Create a series of outbound rules to allow access to other private endpoints and FQDNs on the Internet
         outboundRules = { 
+          managed_pe_nonprod_registry = {
+            category = "UserDefined"
+            type = "PrivateEndpoint"
+            destination = {
+              serviceResourceId = var.registry_id_nonprod
+              subresourceTarget = "amlregistry"
+            }
+          }
+
           # Create required FQDN rules to support usage of Python package managers such as pip and conda
           AllowPypi = {
             type        = "FQDN"
@@ -308,6 +383,9 @@ resource "azapi_resource" "aml_workspace" {
           }
         }
       }
+      # Set the primary user assigned managed identity for the AML workspace
+      primaryUserAssignedIdentity = var.managed_identity == "user_assigned" ? azurerm_user_assigned_identity.umi_aml[0].id : null
+
       # Allow the platform to grant the SMI for the workspace AI Administrator on the resource group the AML workspace
       # is deployed to.
       allowRoleAssignmentOnRG = true
@@ -315,6 +393,7 @@ resource "azapi_resource" "aml_workspace" {
       systemDatastoresAuthMode = "identity"
       # Create the manage virtual network for the AML workspace upon creation vs waiting for the first compute resource to be created
       provisionNetworkNow = true
+
     }
 
     tags = var.tags
@@ -421,7 +500,6 @@ resource "azurerm_monitor_diagnostic_setting" "aml-diag-base" {
     category = "RunReadEvent"
   }
 }
-
 ##### Create a Private Endpoints workspace required resources including default storage account
 ##### Key Vault, and Container Registry
 
@@ -429,23 +507,23 @@ resource "azurerm_monitor_diagnostic_setting" "aml-diag-base" {
 ## Key Vault, and Container Registry
 module "private_endpoint_st_default_blob" {
   depends_on = [
-    module.storage_account_default
+    module.storage_account_aml
   ]
 
   source              = "../../modules/private-endpoint"
   random_string       = var.random_string
   location            = var.workload_vnet_location
   location_code       = var.workload_vnet_location_code
-  resource_group_name = azurerm_resource_group.rgwork.name
+  resource_group_name = var.workspace_resource_group_name
   tags                = var.tags
 
-  resource_name    = module.storage_account_default.name
-  resource_id      = module.storage_account_default.id
+  resource_name    = module.storage_account_aml.name
+  resource_id      = module.storage_account_aml.id
   subresource_name = "blob"
 
   subnet_id = var.subnet_id
   private_dns_zone_ids = [
-    "/subscriptions/${var.sub_id}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+    "/subscriptions/${var.sub_id_dns}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
   ]
 }
 
@@ -458,16 +536,16 @@ module "private_endpoint_st_default_file" {
   random_string       = var.random_string
   location            = var.workload_vnet_location
   location_code       = var.workload_vnet_location_code
-  resource_group_name = azurerm_resource_group.rgwork.name
+  resource_group_name = var.workspace_resource_group_name
   tags                = var.tags
 
-  resource_name    = module.storage_account_default.name
-  resource_id      = module.storage_account_default.id
+  resource_name    = module.storage_account_aml.name
+  resource_id      = module.storage_account_aml.id
   subresource_name = "file"
 
   subnet_id = var.subnet_id
   private_dns_zone_ids = [
-    "/subscriptions/${var.sub_id}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.file.core.windows.net"
+    "/subscriptions/${var.sub_id_dns}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.file.core.windows.net"
   ]
 }
 
@@ -480,16 +558,16 @@ module "private_endpoint_st_default_table" {
   random_string       = var.random_string
   location            = var.workload_vnet_location
   location_code       = var.workload_vnet_location_code
-  resource_group_name = azurerm_resource_group.rgwork.name
+  resource_group_name = var.workspace_resource_group_name
   tags                = var.tags
 
-  resource_name    = module.storage_account_default.name
-  resource_id      = module.storage_account_default.id
+  resource_name    = module.storage_account_aml.name
+  resource_id      = module.storage_account_aml.id
   subresource_name = "table"
 
   subnet_id = var.subnet_id
   private_dns_zone_ids = [
-    "/subscriptions/${var.sub_id}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.table.core.windows.net"
+    "/subscriptions/${var.sub_id_dns}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.table.core.windows.net"
   ]
 }
 
@@ -502,16 +580,16 @@ module "private_endpoint_st_default_queue" {
   random_string       = var.random_string
   location            = var.workload_vnet_location
   location_code       = var.workload_vnet_location_code
-  resource_group_name = azurerm_resource_group.rgwork.name
+  resource_group_name = var.workspace_resource_group_name
   tags                = var.tags
 
-  resource_name    = module.storage_account_default.name
-  resource_id      = module.storage_account_default.id
+  resource_name    = module.storage_account_aml.name
+  resource_id      = module.storage_account_aml.id
   subresource_name = "queue"
 
   subnet_id = var.subnet_id
   private_dns_zone_ids = [
-    "/subscriptions/${var.sub_id}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.queue.core.windows.net"
+    "/subscriptions/${var.sub_id_dns}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.queue.core.windows.net"
   ]
 }
 
@@ -524,17 +602,17 @@ module "private_endpoint_kv" {
   random_string       = var.random_string
   location            = var.workload_vnet_location
   location_code       = var.workload_vnet_location_code
-  resource_group_name = azurerm_resource_group.rgwork.name
+  resource_group_name = var.workspace_resource_group_name
   tags                = var.tags
 
-  resource_name    = module.keyvault_aml.name
-  resource_id      = module.keyvault_aml.id
+  resource_name    = azurerm_key_vault.kv.name
+  resource_id      = azurerm_key_vault.kv.id
   subresource_name = "vault"
 
 
   subnet_id = var.subnet_id
   private_dns_zone_ids = [
-    "/subscriptions/${var.sub_id}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+    "/subscriptions/${var.sub_id_dns}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
   ]
 }
 
@@ -547,7 +625,7 @@ module "private_endpoint_container_registry" {
   random_string       = var.random_string
   location            = var.workload_vnet_location
   location_code       = var.workload_vnet_location_code
-  resource_group_name = azurerm_resource_group.rgwork.name
+  resource_group_name = var.workspace_resource_group_name
   tags                = var.tags
 
   resource_name    = module.container_registry.name
@@ -556,7 +634,7 @@ module "private_endpoint_container_registry" {
 
   subnet_id = var.subnet_id
   private_dns_zone_ids = [
-    "/subscriptions/${var.sub_id}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io"
+    "/subscriptions/${var.sub_id_dns}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io"
   ]
 }
 
@@ -574,7 +652,7 @@ module "private_endpoint_aml_workspace" {
   random_string       = var.random_string
   location            = var.workload_vnet_location
   location_code       = var.workload_vnet_location_code
-  resource_group_name = azurerm_resource_group.rgwork.name
+  resource_group_name = var.workspace_resource_group_name
   tags                = var.tags
 
   resource_name    = azapi_resource.aml_workspace.name
@@ -583,8 +661,8 @@ module "private_endpoint_aml_workspace" {
 
   subnet_id = var.subnet_id
   private_dns_zone_ids = [
-    "/subscriptions/${var.sub_id}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.api.azureml.ms",
-    "/subscriptions/${var.sub_id}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.notebooks.azure.net"
+    "/subscriptions/${var.sub_id_dns}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.api.azureml.ms",
+    "/subscriptions/${var.sub_id_dns}/resourceGroups/${var.resource_group_name_dns}/providers/Microsoft.Network/privateDnsZones/privatelink.notebooks.azure.net"
   ]
 }
 
@@ -604,96 +682,5 @@ resource "azurerm_private_dns_a_record" "aml_workspace_compute_instance" {
   ]
 }
 
-##### Create non-human role assignments
-#####
- 
-resource "time_sleep" "wait_aml_workspace_identities" {
-  depends_on = [
-    azapi_resource.aml_workspace
-  ]
-  create_duration = "10s"
-}
 
-## Create role assignments granting Reader role over the resource group to AML Workspace's
-## system-managed identity
-resource "azurerm_role_assignment" "rg_reader" {
-  depends_on = [
-    time_sleep.wait_aml_workspace_identities
-  ]
-  name                 = uuidv5("dns", "${azurerm_resource_group.rgwork.name}${azapi_resource.aml_workspace.output.identity.principalId}reader")
-  scope                = azurerm_resource_group.rgwork.id
-  role_definition_name = "Reader"
-  principal_id         = azapi_resource.aml_workspace.output.identity.principalId
-}
-
-## Create role assignments granting Azure AI Enterprise Network Connection Approver role over the resource group to the AML Workspace's
-## system-managed identity
-resource "azurerm_role_assignment" "ai_network_connection_approver" {
-  depends_on = [
-    azurerm_role_assignment.rg_reader
-  ]
-  name                 = uuidv5("dns", "${azurerm_resource_group.rgwork.name}${azapi_resource.aml_workspace.output.identity.principalId}netapprover")
-  scope                = azurerm_resource_group.rgwork.id
-  role_definition_name = "Azure AI Enterprise Network Connection Approver"
-  principal_id         = azapi_resource.aml_workspace.output.identity.principalId
-}
-
-##### Create human role assignments
-#####
-
-## Create Azure RBAC Role Assignment granting the Azure AI Developer Role to the user.
-## This allows the user to deploy models from the catalog to serverless compute resources
-##
-resource "azurerm_role_assignment" "wk_perm_ai_developer" {
-  depends_on = [
-    azapi_resource.aml_workspace
-  ]
-  name                 = uuidv5("dns", "${azurerm_resource_group.rgwork.name}${var.user_object_id}${azapi_resource.aml_workspace.name}aidev")
-  scope                = azapi_resource.aml_workspace.id
-  role_definition_name = "Azure AI Developer"
-  principal_id         = var.user_object_id
-}
-
-## Create Azure RBAC Role Assignment granting the Azure Machine Learning Compute Operator role to the user.
-## This allows the user to perform all actions on compute resources within the workspace.
-##
-resource "azurerm_role_assignment" "wk_perm_compute_operator" {
-  depends_on = [
-    azapi_resource.aml_workspace
-  ]
-  name                 = uuidv5("dns", "${azurerm_resource_group.rgwork.name}${var.user_object_id}${azapi_resource.aml_workspace.name}computeoperator")
-  scope                = azapi_resource.aml_workspace.id
-  role_definition_name = "AzureML Compute Operator"
-  principal_id         = var.user_object_id
-}
-
-## Create Azure RBAC Role Assignment granting the Azure Machine Learning Data Scientist role to the user.
-## This allows the user to perform all actions except for creating compute resources.
-##
-resource "azurerm_role_assignment" "wk_perm_data_scientist" {
-  depends_on = [
-    azapi_resource.aml_workspace
-  ]
-  name                 = uuidv5("dns", "${azurerm_resource_group.rgwork.name}${var.user_object_id}${azapi_resource.aml_workspace.name}datascientist")
-  scope                = azapi_resource.aml_workspace.id
-  role_definition_name = "AzureML Data Scientist"
-  principal_id         = var.user_object_id
-}
-
-## Create role assignments for the data scientist granting them the Storage Blob Data Contributor and Storage File Data Privileged Contributor roles
-## over the default storage account
-##
-resource "azurerm_role_assignment" "blob_perm_default_sa" {
-  name                 = uuidv5("dns", "${azurerm_resource_group.rgwork.name}${var.user_object_id}${module.storage_account_default.name}blob")
-  scope                = module.storage_account_default.id
-  role_definition_name = "Storage Blob Data Contributor"
-  principal_id         = var.user_object_id
-}
-
-resource "azurerm_role_assignment" "file_perm_default_sa" {
-  name                 = uuidv5("dns", "${azurerm_resource_group.rgwork.name}${var.user_object_id}${module.storage_account_default.name}file")
-  scope                = module.storage_account_default.id
-  role_definition_name = "Storage File Data Privileged Contributor"
-  principal_id         = var.user_object_id
-}
 
