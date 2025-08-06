@@ -106,7 +106,7 @@ resource "azurerm_virtual_machine_extension" "custom-script-extension" {
     commandToExecute = <<-EOT
       /bin/bash -c "echo '${replace(base64encode(file("${path.module}/../../../scripts/bootstrap-ubuntu-web.sh")), "'", "'\\''")}' | base64 -d > /tmp/bootstrap-ubuntu-web.sh && \
       chmod +x /tmp/bootstrap-ubuntu-web.sh && \
-      /bin/bash /tmp/bootstrap-ubuntu-web.sh"
+      /bin/bash /tmp/bootstrap-ubuntu-web.sh ${var.custom_port}"
     EOT
   })
 

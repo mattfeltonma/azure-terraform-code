@@ -15,6 +15,12 @@ variable "availability_zone" {
     default     = null
 }
 
+variable "custom_port" {
+  description = "Set the SSH port to a custom port of 2222"
+  type        = bool
+  default     = false
+}
+
 variable "dce_id" {
   description = "The resource id of the data collection endpoint to associate this machine to"
   type        = string

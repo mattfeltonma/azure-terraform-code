@@ -179,7 +179,7 @@ resource "azapi_resource" "ai_foundry_resource" {
   ]
 
   type                      = "Microsoft.CognitiveServices/accounts@2025-04-01-preview"
-  name                      = "aif${var.purpose}${var.location_code}159"
+  name                      = "aif${var.purpose}${var.location_code}${var.random_string}"
   parent_id                 = azurerm_resource_group.rg_work.id
   location                  = var.location
   schema_validation_enabled = false
@@ -206,7 +206,7 @@ resource "azapi_resource" "ai_foundry_resource" {
       allowProjectManagement = true
 
       # Set custom subdomain name for DNS names created for this Foundry resource
-      customSubDomainName = "aif${var.purpose}${var.location_code}159"
+      customSubDomainName = "aif${var.purpose}${var.location_code}${var.random_string}"
 
       # Set encryption settings based on whether PMK or CMK is specified
       encryption = local.cmk_umi == true ? {

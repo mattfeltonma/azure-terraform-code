@@ -1,8 +1,8 @@
-##### Create core resources
-#####
+########## Create core resources
+##########
 
-# Create a random string to establish a unique name for resources
-#
+## Create a random string to establish a unique name for resources
+##
 resource "random_string" "unique" {
   length      = 3
   min_numeric = 3
@@ -12,8 +12,8 @@ resource "random_string" "unique" {
   upper       = false
 }
 
-# Create resource groups
-#
+## Create resource group where resources from this template will be deployed to
+##
 resource "azurerm_resource_group" "rg_demo_nsp" {
   name     = "rgdemonsp${random_string.unique.result}"
   location = var.location
@@ -30,8 +30,8 @@ resource "azurerm_resource_group" "rg_demo_nsp" {
 ##### Create core infrastructure
 #####
 
-# Create Log Analytics Workspace and Data Collection Endpoints and Data Collection Rules
-#
+## Create Log Analytics Workspace and Data Collection Endpoints and Data Collection Rules
+##
 module "law" {
   depends_on = [
     azurerm_resource_group.rg_demo_nsp
@@ -46,8 +46,8 @@ module "law" {
   tags                        = local.tags
 }
 
-# Create Storage Account for Flow Logs
-#
+## Create Storage Account for Flow Logs
+##
 module "storage_account_flow_logs" {
   depends_on = [
     azurerm_resource_group.rg_demo_nsp,
@@ -62,11 +62,13 @@ module "storage_account_flow_logs" {
   resource_group_name = azurerm_resource_group.rg_demo_nsp.name
   tags                = local.tags
 
+  network_trusted_services_bypass = ["AzureServices", "Logging", "Metrics"]
+
   law_resource_id = module.law.id
 }
 
-# Create a virtual network to use for virtual machine access
-#
+## Create a virtual network to use for virtual machine access
+##
 resource "azurerm_virtual_network" "vnet" {
   name                = "${local.vnet_name}nsp${local.location_code}${random_string.unique.result}"
   location            = var.location
@@ -123,8 +125,8 @@ resource "azurerm_subnet" "subnet_svc" {
   private_endpoint_network_policies = local.private_endpoint_network_policies
 }
 
-# Create Private DNS Zones
-#
+## Create Private DNS Zones
+##
 module "private_dns_zone_keyvault" {
   depends_on = [
     azurerm_virtual_network.vnet
@@ -139,8 +141,8 @@ module "private_dns_zone_keyvault" {
   tags = var.tags
 }
 
-# Create network security groups
-#
+## Create network security groups
+##
 module "nsg_app" {
   source              = "../../modules/network-security-group"
   purpose             = "nspapp"
@@ -303,8 +305,8 @@ module "nsg_svc" {
   ]
 }
 
-# Associate network security groups with subnets
-#
+## Associate network security groups with subnets
+##
 resource "azurerm_subnet_network_security_group_association" "subnet_nsg_association_app" {
   depends_on = [
     azurerm_subnet.subnet_app,
@@ -335,8 +337,8 @@ resource "azurerm_subnet_network_security_group_association" "subnet_nsg_associa
   network_security_group_id = module.nsg_svc.id
 }
 
-# Create Azure Bastion instance
-#
+## Create Azure Bastion instance
+##
 module "bastion" {
   depends_on = [
     azurerm_subnet_network_security_group_association.subnet_nsg_association_bastion
@@ -348,15 +350,15 @@ module "bastion" {
   location_code       = local.location_code
   resource_group_name = azurerm_resource_group.rg_demo_nsp.name
 
-  sku             = "Standard"
+  sku             = "Basic"
   subnet_id       = azurerm_subnet.subnet_bastion.id
   law_resource_id = module.law.id
 
   tags = var.tags
 }
 
-# Create a user-assigned managed identity that will be used by virtual machine
-#
+## Create a user-assigned managed identity that will be used by virtual machine
+##
 module "managed_identity_vm" {
   source              = "../../modules/managed-identity"
   purpose             = "nspvm"
@@ -377,8 +379,8 @@ module "managed_identity_storage_account" {
   tags                = var.tags
 }
 
-# Pause for 10 seconds to allow the managed identity that was created to be replicated
-#
+## Pause for 10 seconds to allow the managed identity that was created to be replicated
+##
 resource "time_sleep" "wait_umi_creation" {
   depends_on = [
     module.managed_identity_vm,
@@ -388,8 +390,8 @@ resource "time_sleep" "wait_umi_creation" {
   create_duration = "10s"
 }
 
-# Create Key Vault which is enabled with Private Link
-#
+## Create Key Vault which is enabled with Private Link
+##
 module "wl_keyvault_private_link" {
   depends_on = [
     azurerm_resource_group.rg_demo_nsp,
@@ -416,8 +418,8 @@ module "wl_keyvault_private_link" {
   tags = local.tags
 }
 
-# Add a secret to the Key Vault with a Private Endpoint
-#
+## Add a secret to the Key Vault with a Private Endpoint
+##
 resource "azurerm_key_vault_secret" "special_pl" {
   depends_on = [
     module.wl_keyvault_private_link
@@ -427,8 +429,8 @@ resource "azurerm_key_vault_secret" "special_pl" {
   key_vault_id = module.wl_keyvault_private_link.id
 }
 
-# Add a key to be used for the storage account CMK
-#
+## Add a key to be used for the storage account CMK
+##
 resource "azurerm_key_vault_key" "storage" {
   depends_on = [
     azurerm_key_vault_secret.special_pl
@@ -447,8 +449,8 @@ resource "azurerm_key_vault_key" "storage" {
   ]
 }
 
-# Create public IP address for the virtual machine
-#
+## Create public IP address for the virtual machine
+##
 module "vm_public_ip_address" {
   source              = "../../modules/public-ip"
   random_string       = random_string.unique.result
@@ -462,8 +464,8 @@ module "vm_public_ip_address" {
   tags                = var.tags
 }
 
-# Create Key Vault which is not enabled with Private Link
-#
+## Create Key Vault which is not enabled with Private Link
+##
 module "wl_keyvault_no_private_link" {
   depends_on = [
     azurerm_resource_group.rg_demo_nsp,
@@ -491,8 +493,8 @@ module "wl_keyvault_no_private_link" {
   tags = local.tags
 }
 
-# Add a secret to the Key Vault without a Private Endpoint
-#
+## Add a secret to the Key Vault without a Private Endpoint
+##
 resource "azurerm_key_vault_secret" "special_no_pl" {
   depends_on = [
     module.wl_keyvault_private_link
@@ -502,8 +504,8 @@ resource "azurerm_key_vault_secret" "special_no_pl" {
   key_vault_id = module.wl_keyvault_no_private_link.id
 }
 
-# Add a Private Endpoint for workload Key Vault that will include a Private Endpoint
-#
+## Add a Private Endpoint for workload Key Vault that will include a Private Endpoint
+##
 module "private_endpoint_kv" {
   depends_on = [
     module.wl_keyvault_private_link,
@@ -528,8 +530,8 @@ module "private_endpoint_kv" {
   ]
 }
 
-# Add role assignments to allow VM and Storage Account to secrets stored in the Key Vault
-#
+## Add role assignments to allow VM and Storage Account to secrets stored in the Key Vault
+##
 resource "azurerm_role_assignment" "umi_vm_kv_pl" {
   depends_on = [
     module.managed_identity_vm,
@@ -563,8 +565,8 @@ resource "azurerm_role_assignment" "umi_st_kv" {
   principal_id         = module.managed_identity_storage_account.principal_id
 }
 
-# Pause for 120 seconds to allow RBAC assignments to propagate
-#
+## Pause for 120 seconds to allow RBAC assignments to propagate
+##
 resource "time_sleep" "wait_role_assignments" {
   depends_on = [
     azurerm_role_assignment.umi_vm_kv_pl,
@@ -576,8 +578,8 @@ resource "time_sleep" "wait_role_assignments" {
   create_duration = "120s"
 }
 
-# Create a storage account with a CMK
-#
+## Create a storage account with a CMK
+##
 resource "azurerm_storage_account" "storage_account" {
   name                = "stnsp${local.location_code}${random_string.unique.result}"
   resource_group_name = azurerm_resource_group.rg_demo_nsp.name
@@ -619,30 +621,10 @@ resource "azurerm_storage_account" "storage_account" {
   }
 }
 
-# Configure diagnostic settings for the storage account and the blob endpoint
-#
-resource "azurerm_monitor_diagnostic_setting" "diag-storage-base" {
-
-  depends_on = [azurerm_storage_account.storage_account]
-
-  name                       = "diag-base"
-  target_resource_id         = azurerm_storage_account.storage_account.id
-  log_analytics_workspace_id = module.law.id
-
-  metric {
-    category = "Transaction"
-  }
-
-  metric {
-    category = "Capacity"
-  }
-}
-
 resource "azurerm_monitor_diagnostic_setting" "diag-blob" {
-
   depends_on = [
-    azurerm_storage_account.storage_account,
-  azurerm_monitor_diagnostic_setting.diag-storage-base]
+    azurerm_storage_account.storage_account
+  ]
 
   name                       = "diag-blob"
   target_resource_id         = "${azurerm_storage_account.storage_account.id}/blobServices/default"
@@ -669,8 +651,8 @@ resource "azurerm_monitor_diagnostic_setting" "diag-blob" {
   }
 }
 
-# Create the flow log and enable traffic analytics
-#
+## Create the flow log and enable traffic analytics
+##
 resource "azapi_resource" "vnet_flow_log" {
   depends_on = [
     azurerm_virtual_network.vnet
@@ -711,8 +693,8 @@ resource "azapi_resource" "vnet_flow_log" {
   tags = var.tags
 }
 
-# Create a Linux tool server
-#
+## Create a Linux tool server
+##
 module "linux_tool" {
   depends_on = [
     azurerm_subnet_network_security_group_association.subnet_nsg_association_app,
@@ -758,8 +740,8 @@ module "linux_tool" {
 ##### Create Network Security Perimeter and supporting resources
 #####
 
-# Create Network Security Perimeter and configure its diagnostic settings
-#
+## Create Network Security Perimeter and configure its diagnostic settings
+##
 resource "azapi_resource" "nsp_st_cmk" {
   depends_on = [
     module.linux_tool,
@@ -834,8 +816,8 @@ resource "azurerm_monitor_diagnostic_setting" "diag-nsp" {
   }
 }
 
-# Create two profiles in the NSP. One profile will be used for the Key Vault and other for the storage account. Each profile will have different access rules
-#
+## Create two profiles in the NSP. One profile will be used for the Key Vault and other for the storage account. Each profile will have different access rules
+##
 resource "azapi_resource" "profile_kv_cmk" {
   depends_on = [
     azapi_resource.nsp_st_cmk
@@ -860,8 +842,8 @@ resource "azapi_resource" "profile_st_cmk" {
   tags = var.tags
 }
 
-# Create access rules for the profile applied to the storage account. The storage account will be accessible by the VM's public IP address.
-#
+## Create access rules for the profile applied to the storage account. The storage account will be accessible by the VM's public IP address.
+##
 resource "azapi_resource" "access_rule_st_cmk" {
   depends_on = [
     azapi_resource.profile_st_cmk
@@ -885,8 +867,8 @@ resource "azapi_resource" "access_rule_st_cmk" {
   tags = var.tags
 }
 
-# Create a resource associations
-#
+## Create a resource associations
+##
 resource "azapi_resource" "assoc_kv_pl" {
   depends_on = [
     azapi_resource.profile_st_cmk
