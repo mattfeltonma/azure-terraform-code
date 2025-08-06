@@ -710,7 +710,7 @@ resource "azurerm_role_assignment" "aisearch_user_data_contributor" {
 
 ## Added AI Foundry account purger to avoid running into InUseSubnetCannotBeDeleted-lock caused by the agent subnet delegation.
 ## The azapi_resource_action.purge_ai_foundry (only gets executed during destroy) purges the AI foundry account removing /subnets/snet-agent/serviceAssociationLinks/legionservicelink so the agent subnet can get properly removed.
-
+## Credit for this to Sebastian Graf
 resource "azapi_resource_action" "purge_ai_foundry" {
   method      = "DELETE"
   resource_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.CognitiveServices/locations/${azurerm_resource_group.rg_work.location}/resourceGroups/${azurerm_resource_group.rg_work.name}/deletedAccounts/aifoundry${var.random_string}"
