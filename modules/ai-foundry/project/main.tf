@@ -6,7 +6,7 @@
 resource "azapi_resource" "ai_foundry_project" {
   type                      = "Microsoft.CognitiveServices/accounts/projects@2025-04-01-preview"
   name                      = var.project_name
-  parent_id                 = var.ai_foundry_resource_id
+  parent_id                 = var.ai_foundry_account_id
   location                  = var.location
   schema_validation_enabled = false
 

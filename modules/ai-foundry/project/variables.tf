@@ -1,4 +1,4 @@
-variable "ai_foundry_resource_id" {
+variable "ai_foundry_account_id" {
   description = "The resource id of the AI Foundry resource the project will be created in"
   type        = string
 }

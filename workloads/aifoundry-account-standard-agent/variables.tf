@@ -1,7 +1,7 @@
 variable "encryption" {
   description = "Indicate whether the AI Foundry account should be encrypted with a provider-managed key or customer-managed key. CMK will create a Key Vault, key, and necessary role assignments"
   type        = string
-  default = "pmk"
+  default     = "pmk"
   validation {
     condition     = contains(["pmk", "cmk"], var.encryption)
     error_message = "Encryption must be either 'pmk' or 'cmk'."
@@ -27,7 +27,7 @@ variable "managed_identity" {
     condition     = contains(["user_assigned", "system_assigned"], var.managed_identity)
     error_message = "Managed identity must be either 'user_assigned' or 'system_assigned'."
   }
-  default     = "system_assigned"
+  default = "system_assigned"
 }
 
 variable "purpose" {
@@ -45,7 +45,7 @@ variable "resource_group_name_dns" {
   type        = string
 }
 
-variable "sub_id" {
+variable "sub_id_dns" {
   description = "The subscription where the Private DNS Zones are located"
   type        = string
 }
@@ -53,6 +53,7 @@ variable "sub_id" {
 variable "subnet_id_agent" {
   description = "The subnet id to use for Standard Agent vnet injection"
   type        = string
+  default     = null
 }
 
 variable "subnet_id_private_endpoints" {

@@ -1,3 +1,13 @@
+variable "encryption" {
+  description = "Specify whether the AML Workspace should be encrypted with a CMK or PMK. Default is PMK"
+  type        = string
+  validation {
+    condition     = contains(["cmk", "pmk"], var.encryption)
+    error_message = "Encryption must be either 'cmk' or 'pmk'."
+  }
+  default     = "pmk"
+}
+
 variable "location" {
   description = "The name of the location to provision the resources to"
   type        = string
@@ -46,6 +56,11 @@ variable "subnet_id" {
 variable "tags" {
   description = "The tags to apply to the resource"
   type        = map(string)
+}
+
+variable "trusted_ip" {
+  description = "The IP address where the Terraform code will be run from to allow access to the data plane of Azure Key Vault"
+  type        = string
 }
 
 variable "user_object_id" {

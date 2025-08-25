@@ -13,6 +13,16 @@ variable "purpose" {
   type        = string
 }
 
+variable "managed_identity" {
+  description = "Indicate whether a user-assigned managed identity or system-assigned managed identity should be used by hub"
+  type        = string
+  validation {
+    condition     = contains(["user_assigned", "system_assigned"], var.managed_identity)
+    error_message = "Managed identity must be either 'user_assigned' or 'system_assigned'."
+  }
+  default     = "system_assigned"
+}
+
 variable "random_string" {
   description = "The random string to append to the resource name"
   type        = string
@@ -23,7 +33,7 @@ variable "resource_group_name_dns" {
   type        = string
 }
 
-variable "sub_id" {
+variable "sub_id_dns" {
   description = "The subscription where the Private DNS Zones are located"
   type        = string
 }

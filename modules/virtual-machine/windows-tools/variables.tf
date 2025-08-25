@@ -14,13 +14,13 @@ variable "availability_zone" {
     type        = string
     default     = null
 }
-
+ 
 variable "dce_id" {
   description = "The resource id of the Data Collection Endpoint"
   type        = string
 }
 
-variable "dcr_id_windows" {
+variable "dcr_id" {
   description = "The resource id of the Data Collection Rule for Windows"
   type        = string
 }
@@ -58,16 +58,6 @@ variable "identities"{
   default = null
 }
 
-variable "image_reference" {
-    description = "The reference to the image to use for the virtual machine"
-    type        = object({
-        publisher = string
-        offer     = string
-        sku       = string
-        version   = string
-    })
-}
-
 variable "location" {
   description = "The location to deploy the virtual machine"
   type        = string
@@ -76,6 +66,11 @@ variable "location" {
 variable "location_code" {
   description = "The location code to append to the resource name"
   type = string
+}
+
+variable "log_analytics_workspace_id" {
+  description = "The resource ID of the Log Analytics Workspace the resources in this template should deliver logs to"
+  type        = string
 }
 
 variable "private_ip_address" {
@@ -90,10 +85,10 @@ variable "private_ip_address_allocation" {
   default     = "Dynamic"
 }
 
-variable "public_ip_address_id" {
-  description = "The resource ID of the public IP address to associate with the virtual machine"
-  type        = string
-  default     = null
+variable "public_ip_address_enable" {
+  description = "Whether to create a public IP address for the virtual machine"
+  type        = bool
+  default     = false
 }
 
 variable "purpose" {

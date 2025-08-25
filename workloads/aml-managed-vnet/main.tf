@@ -137,6 +137,63 @@ module "keyvault_aml" {
   firewall_bypass         = "AzureServices"
 }
 
+########## Create an Azure Key Vault instance and a key if customer-managed key encryption is specified
+##########
+##########
+
+## Create the Azure Key Vault instance which will be used to store the key to support CMK encryption of the AML Workspace
+##
+module "keyvault_aml_cmk" {
+  count = var.encryption == "cmk" ? 1 : 0
+
+  source              = "../../modules/key-vault"
+  random_string       = var.random_string
+  location            = var.location
+  location_code       = var.location_code
+  resource_group_name = azurerm_resource_group.rg_work.name
+  purpose             = var.purpose
+  tags                = var.tags
+
+  # Resource logs for the Key Vault will be sent to this Log Analytics Workspace
+  law_resource_id = azurerm_log_analytics_workspace.law.id
+
+  # Enable RBAC authorization on the Key Vault
+  rbac_enabled = true
+
+  # The user specified here will have the Azure RBAC Key Vault Administrator role over the Azure Key Vault instance
+  kv_admin_object_id = var.user_object_id
+
+  # Disable public access and allow the Trusted Azure Service firewall exception
+  firewall_default_action = "Deny"
+  firewall_bypass         = "AzureServices"
+
+  # Enable purge protection and soft delete to support the usage of CMK
+  purge_protection           = true
+  soft_delete_retention_days = 7
+
+  # Allow the trusted IP where the Terraform is being deployed from access to the vault
+  firewall_ip_rules = [
+    var.trusted_ip
+  ]
+}
+
+## Create the CMK used to encrypt the AML Workspace
+##
+resource "azurerm_key_vault_key" "key_cmk_aml" {
+  count = var.encryption == "cmk" ? 1 : 0
+
+  depends_on = [
+    module.keyvault_aml_cmk
+  ]
+
+  name         = "cmk-aml"
+  key_vault_id = module.keyvault_aml_cmk[0].id
+  key_type     = "RSA"
+
+  key_size = 4096
+  key_opts = ["decrypt", "encrypt", "sign", "unwrapKey", "verify", "wrapKey"]
+}
+
 ########## Create the user-assigned managed identity for the AML workspace and the the necessary role assignments. 
 ########## This section is only executed if the user specifies that a user-assigned managed identity should be created
 ########## using the user_assigne_managed_identity variable
@@ -166,7 +223,7 @@ resource "time_sleep" "wait_umi_aml_creation" {
   count = var.managed_identity == "user_assigned" ? 1 : 0
 
   depends_on = [
-    azurerm_user_assigned_identity.umi_aml[0]
+    azurerm_user_assigned_identity.umi_aml
   ]
   create_duration = "10s"
 }
@@ -178,7 +235,7 @@ resource "azurerm_role_assignment" "umi_aml_rg_aiadministrator" {
   count = var.managed_identity == "user_assigned" ? 1 : 0
 
   depends_on = [
-    time_sleep.wait_umi_aml_creation[0]
+    time_sleep.wait_umi_aml_creation
   ]
 
   name                 = uuidv5("dns", "${azurerm_resource_group.rg_work.name}${azurerm_user_assigned_identity.umi_aml[0].name}aiadmin")
@@ -194,7 +251,7 @@ resource "azurerm_role_assignment" "umi_aml_st_blob_data_contributor" {
   count = var.managed_identity == "user_assigned" ? 1 : 0
 
   depends_on = [
-    azurerm_role_assignment.umi_aml_rg_aiadministrator[0]
+    azurerm_role_assignment.umi_aml_rg_aiadministrator
   ]
 
   name                 = uuidv5("dns", "${azurerm_resource_group.rg_work.name}${module.storage_account_aml.name}${azurerm_user_assigned_identity.umi_aml[0].name}blobdata")
@@ -207,7 +264,7 @@ resource "azurerm_role_assignment" "umi_aml_st_file_data_contributor" {
   count = var.managed_identity == "user_assigned" ? 1 : 0
 
   depends_on = [
-    azurerm_role_assignment.umi_aml_st_blob_data_contributor[0]
+    azurerm_role_assignment.umi_aml_st_blob_data_contributor
   ]
 
   name                 = uuidv5("dns", "${azurerm_resource_group.rg_work.name}${module.storage_account_aml.name}${azurerm_user_assigned_identity.umi_aml[0].name}filedata")
@@ -239,12 +296,27 @@ resource "azurerm_role_assignment" "umi_aml_rg_azure_ai_ent_net_conn_app" {
   count = var.managed_identity == "user_assigned" ? 1 : 0
 
   depends_on = [
-    azurerm_role_assignment.umi_aml_kv_admin[0]
+    azurerm_role_assignment.umi_aml_kv_admin
   ]
 
   name                 = uuidv5("dns", "${azurerm_resource_group.rg_work.name}${azurerm_user_assigned_identity.umi_aml[0].name}entnetconnapp")
   scope                = azurerm_resource_group.rg_work.id
   role_definition_name = "Azure AI Enterprise Network Connection Approver"
+  principal_id         = azurerm_user_assigned_identity.umi_aml[0].principal_id
+}
+
+## Create an Azure RBAC role assignment for the Key Vault Crypto User role on the Key Vault used for the CMK
+## assigned to the AML Workspace user-assigned managed identity
+resource "azurerm_role_assignment" "umi_aml_kv_cryto_user" {
+  count = var.encryption == "cmk" ? 1 : 0
+
+  depends_on = [
+    azurerm_role_assignment.umi_aml_rg_azure_ai_ent_net_conn_app
+  ]
+
+  name                 = uuidv5("dns", "${azurerm_resource_group.rg_work.name}${module.keyvault_aml_cmk[0].name}${azurerm_user_assigned_identity.umi_aml[0].name}kvcryptouser")
+  scope                = module.keyvault_aml_cmk[0].id
+  role_definition_name = "Key Vault Crypto User"
   principal_id         = azurerm_user_assigned_identity.umi_aml[0].principal_id
 }
 
@@ -254,7 +326,7 @@ resource "time_sleep" "wait_umi_role_assignments" {
   count = var.managed_identity == "user_assigned" ? 1 : 0
 
   depends_on = [
-    azurerm_role_assignment.umi_aml_rg_azure_ai_ent_net_conn_app[0]
+    azurerm_role_assignment.umi_aml_kv_cryto_user
   ]
   create_duration = "120s"
 }
@@ -304,6 +376,24 @@ resource "azapi_resource" "aml_workspace" {
       keyVault            = module.keyvault_aml.id
       storageAccount      = module.storage_account_aml.id
       containerRegistry   = module.container_registry_aml.id
+
+      # Enable the HBI feature for additional security since there are few considerations to it
+      hbiWorkspace = true
+
+      # Enable Service-Side Encryption if CMK is specified as the encryption type
+      enableServiceSideCMKEncryption = var.encryption == "cmk" ? true : null
+
+      # Enable CMK encryption if specified as encryption type
+      encryption = var.encryption == "cmk" ? {
+        identity = {
+          userAssignedIdentity = azurerm_user_assigned_identity.umi_aml[0].id
+        }
+        keyVaultProperties = {
+          keyVaultArmId = module.keyvault_aml_cmk[0].id
+          keyIdentifier = azurerm_key_vault_key.key_cmk_aml[0].id
+        }
+      } : null
+
       # Block access to the AML Workspace over the public endpoint
       publicNetworkAccess = "disabled"
       # Configure the AML workspace to use the managed virtual network model
@@ -836,21 +926,4 @@ resource "azurerm_role_assignment" "wk_perm_data_scientist" {
   role_definition_name = "AzureML Data Scientist"
   principal_id         = var.user_object_id
 }
-
-## Create role assignments for the data scientist granting them the Storage Blob Data Contributor and Storage File Data Privileged Contributor roles
-## over the default storage account
-##
-#resource "azurerm_role_assignment" "blob_perm_default_sa" {
-#  name                 = uuidv5("dns", "${azurerm_resource_group.rg_work.name}${var.user_object_id}${module.storage_account_aml.name}blob")
-#  scope                = module.storage_account_aml.id
-#  role_definition_name = "Storage Blob Data Contributor"
-#  principal_id         = var.user_object_id
-#}
-
-#resource "azurerm_role_assignment" "file_perm_default_sa" {
-#  name                 = uuidv5("dns", "${azurerm_resource_group.rg_work.name}${var.user_object_id}${module.storage_account_aml.name}file")
-#  scope                = module.storage_account_aml.id
-#  role_definition_name = "Storage File Data Privileged Contributor"
-#  principal_id         = var.user_object_id
-#}
 

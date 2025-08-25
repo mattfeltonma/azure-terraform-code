@@ -617,7 +617,7 @@ module "bastion" {
   tags = var.tags
 }
 
-## Deploy a Windows or Linux virtual machine for tools and associate it to the DCE and DCR
+## Deploy a Windows tool server
 ##
 module "windows_vm_tool" {
   depends_on = [
@@ -635,16 +635,11 @@ module "windows_vm_tool" {
   admin_password = var.admin_password
 
   vm_size = var.sku_tools_size
-  image_reference = {
-    publisher = "MicrosoftWindowsServer"
-    offer     = "WindowsServer"
-    sku       = var.sku_tools_os
-    version   = "latest"
-  }
   subnet_id = azurerm_subnet.subnet_tools.id
 
   dce_id = var.dce_id
-  dcr_id_windows = var.dcr_id_windows
+  dcr_id = var.dcr_id_windows
+  log_analytics_workspace_id = var.law_resource_id
 
   tags = var.tags
 }

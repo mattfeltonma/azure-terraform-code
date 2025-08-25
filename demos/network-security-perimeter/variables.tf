@@ -1,6 +1,7 @@
-variable "address_space_azure" {
-  description = "The address space in Azure"
+variable "address_space_vnet" {
+  description = "The address space assigned to the virtual network created as part of this demo. It should be /25 or larger."
   type        = string
+  default     = "10.0.0.0/25"
 }
 
 variable "admin_username" {
@@ -14,7 +15,7 @@ variable "admin_password" {
   sensitive   = true
 }
 
-variable "key_vault_admin" {
+variable "key_vault_admin_object_id" {
   description = "The object id of the user or service principal to assign the Key Vault Administrator role to"
   type        = string
 }
@@ -47,7 +48,7 @@ variable "tags" {
   type        = map(string)
 }
 
-variable "tf_server_ip" {
+variable "trusted_ip" {
   description = "The IP address of the Terraform server"
   type        = string
 }
