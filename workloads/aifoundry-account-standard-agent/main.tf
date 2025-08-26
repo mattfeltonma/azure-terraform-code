@@ -89,6 +89,19 @@ resource "azurerm_role_assignment" "ai_foundry_user" {
   principal_id         = var.user_object_id
 }
 
+## Create a role assignment granting a user the Cognitive Services User role which will allow the user
+## to use the various Playgrounds such as the Speech Playground
+resource "azurerm_role_assignment" "cognitive_services_user" {
+  depends_on = [
+    module.ai_foundry_account
+  ]
+
+  name                 = uuidv5("dns", "${var.user_object_id}${module.ai_foundry_account.foundry_account_name}cognitiveservicesuser")
+  scope                = module.ai_foundry_account.foundry_account_id
+  role_definition_name = "Cognitive Services User"
+  principal_id         = var.user_object_id
+}
+
 ########## Create optional non-human role assignments to support import and vectorize feature of AI Search
 ##########
 
