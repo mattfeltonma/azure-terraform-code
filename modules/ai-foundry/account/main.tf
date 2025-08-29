@@ -248,7 +248,7 @@ resource "azurerm_cognitive_deployment" "openai_deployment_gpt_4_1" {
     azurerm_cognitive_account_customer_managed_key.ai_foundry_cmk
   ]
 
-  name                 = "gpt-4.1"
+  name                 = "gpt-4o"
   cognitive_account_id = azapi_resource.ai_foundry_account.id
 
   sku {
@@ -258,7 +258,7 @@ resource "azurerm_cognitive_deployment" "openai_deployment_gpt_4_1" {
 
   model {
     format = "OpenAI"
-    name   = "gpt-4.1"
+    name   = "gpt-4o"
   }
 }
 

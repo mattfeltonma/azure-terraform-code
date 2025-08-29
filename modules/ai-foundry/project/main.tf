@@ -185,7 +185,7 @@ resource "time_sleep" "wait_rbac" {
     azurerm_role_assignment.search_index_data_contributor_ai_foundry_project,
     azurerm_role_assignment.search_service_contributor_ai_foundry_project
   ]
-  create_duration = "60s"
+  create_duration = "120s"
 }
 
 ## Create the AI Foundry project capability host

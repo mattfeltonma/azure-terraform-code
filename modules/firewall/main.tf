@@ -138,7 +138,7 @@ resource "azurerm_firewall_policy_rule_collection_group" "rule_collection_group_
   ]
   name               = "MyEnterpriseRuleCollectionGroup"
   firewall_policy_id = azurerm_firewall_policy.firewall_policy.id
-  priority           = 400
+  priority           = 500
   network_rule_collection {
     name     = "AllowWindowsVmRequired"
     action   = "Allow"
@@ -325,7 +325,7 @@ resource "azurerm_firewall_policy_rule_collection_group" "rule_collection_group_
   ]
   name               = "MyWorkloadRuleCollectionGroup"
   firewall_policy_id = azurerm_firewall_policy.firewall_policy.id
-  priority           = 500
+  priority           = 400
 
   network_rule_collection {
     name     = "AllowInternalApimNetworkRules"
