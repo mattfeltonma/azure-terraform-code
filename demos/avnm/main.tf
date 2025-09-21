@@ -1,5 +1,8 @@
-# Create a random string
-#
+#################### Create core resources
+####################
+
+## Create a random string
+##
 resource "random_string" "unique" {
   length      = 3
   min_numeric = 3
@@ -9,11 +12,11 @@ resource "random_string" "unique" {
   upper       = false
 }
 
-# Create resource groups
-#
+## Create resource groups
+##
 resource "azurerm_resource_group" "rg_demo_avnm" {
   name     = "rgdemoavnm${random_string.unique.result}"
-  location = var.location_prod
+  location = var.region_prod
   tags     = local.tags
 
   lifecycle {
@@ -24,470 +27,243 @@ resource "azurerm_resource_group" "rg_demo_avnm" {
   }
 }
 
-# Create Log Analytics Workspace and Data Collection Endpoints and Data Collection Rules for Windows and Linux in primary region
-#
-module "law" {
-  depends_on = [
-    azurerm_resource_group.rg_demo_avnm
-  ]
+#################### Create resources used for logging
+####################
 
-  source                        = "../../modules/monitor/log-analytics-workspace"
-  random_string                 = random_string.unique.result
-  purpose                       = local.law_purpose
-  location_primary              = var.location_prod
-  location_secondary            = var.location_nonprod
-  location_code_primary         = local.location_code_prod
-  location_code_secondary       = local.location_code_nonprod
-  resource_group_name_primary   = azurerm_resource_group.rg_demo_avnm.name
-  resource_group_name_secondary = azurerm_resource_group.rg_demo_avnm.name
-  tags                          = local.tags
-}
-
-##### Build infrastructure required for demonstration
-#####
-
-# Create Storage Account for Flow Logs
-#
-module "storage-account-flow-logs-prod" {
-  depends_on = [
-    azurerm_resource_group.rg_demo_avnm,
-    module.law
-  ]
-
-  source              = "../../modules/storage-account"
-  purpose             = "flv"
-  random_string       = random_string.unique.result
-  location            = var.location_prod
-  location_code       = local.location_code_prod
-  resource_group_name = azurerm_resource_group.rg_demo_avnm.name
-  tags                = local.tags
-
-  network_trusted_services_bypass = ["AzureServices","Logging", "Metrics"]
-
-  law_resource_id = module.law.id
-}
-
-module "storage-account-flow-logs-nonprod" {
-  depends_on = [
-    module.storage-account-flow-logs-prod,
-    module.law
-  ]
-
-  source              = "../../modules/storage-account"
-  purpose             = "flv"
-  random_string       = random_string.unique.result
-  location            = var.location_nonprod
-  location_code       = local.location_code_nonprod
-  resource_group_name = azurerm_resource_group.rg_demo_avnm.name
-  tags                = local.tags
-
-  network_trusted_services_bypass = ["AzureServices","Logging", "Metrics"]
-
-  law_resource_id = module.law.id
-}
-
-# Build hub virtual networks
-#
-module "transit-vnet-prod" {
-  depends_on = [
-    azurerm_resource_group.rg_demo_avnm,
-    module.law,
-    module.storage-account-flow-logs-prod
-  ]
-
-  source              = "../../modules/vnet/hub-and-spoke/transit-nva"
-  random_string       = random_string.unique.result
-  location            = var.location_prod
-  location_code       = local.location_code_prod
-  resource_group_name = azurerm_resource_group.rg_demo_avnm.name
-
-  address_space_vnet           = local.vnet_cidr_tr_pri
-  subnet_cidr_firewall_public  = cidrsubnet(local.vnet_cidr_tr_pri, 3, 0)
-  subnet_cidr_firewall_private = cidrsubnet(local.vnet_cidr_tr_pri, 3, 1)
-  subnet_cidr_gateway          = cidrsubnet(local.vnet_cidr_tr_pri, 3, 2)
-  subnet_cidr_bastion          = cidrsubnet(local.vnet_cidr_tr_pri, 3, 3)
-
-  address_space_onpremises = var.address_space_onpremises
-  address_space_azure      = var.address_space_cloud
-  vnet_cidr_ss             = local.vnet_cidr_wl1_pri
-  vnet_cidr_wl             = local.vnet_cidr_wl2_pri
-
-  admin_username = var.admin_username
-  admin_password = var.admin_password
-
-  vm_size_nva  = var.sku_vm_size
-  dce_id       = module.law.dce_id_primary
-  dcr_id_linux = module.law.dcr_id_linux
-  asn_router   = local.asn_router_r1
-  nva_count    = 1
-
-  network_watcher_name = "${var.network_watcher_name_prefix}${var.location_prod}"
-  network_watcher_resource_group_name = var.network_watcher_resource_group_name
-  storage_account_id_flow_logs         = module.storage-account-flow-logs-prod.id
-  traffic_analytics_workspace_guid     = module.law.workspace_id
-  traffic_analytics_workspace_id       = module.law.id
-  traffic_analytics_workspace_location = module.law.location
-
-  tags = merge(
-    local.tags,
-    {
-      "env"  = "prod"
-      "func" = "hub"
-    }
-  )
-}
-
-module "transit-vnet-nonprod" {
-  depends_on = [
-    azurerm_resource_group.rg_demo_avnm,
-    module.law,
-    module.storage-account-flow-logs-nonprod
-  ]
-
-  source              = "../../modules/vnet/hub-and-spoke/transit-nva"
-  random_string       = random_string.unique.result
-  location            = var.location_nonprod
-  location_code       = local.location_code_nonprod
-  resource_group_name = azurerm_resource_group.rg_demo_avnm.name
-
-  address_space_vnet           = local.vnet_cidr_tr_sec
-  subnet_cidr_firewall_public  = cidrsubnet(local.vnet_cidr_tr_sec, 3, 0)
-  subnet_cidr_firewall_private = cidrsubnet(local.vnet_cidr_tr_sec, 3, 1)
-  subnet_cidr_gateway          = cidrsubnet(local.vnet_cidr_tr_sec, 3, 2)
-
-  address_space_onpremises = var.address_space_onpremises
-  address_space_azure      = var.address_space_cloud
-  vnet_cidr_ss             = local.vnet_cidr_wl1_sec
-  vnet_cidr_wl             = local.vnet_cidr_wl2_sec
-
-  admin_username = var.admin_username
-  admin_password = var.admin_password
-
-  vm_size_nva  = var.sku_vm_size
-  dce_id       = module.law.dce_id_secondary
-  dcr_id_linux = module.law.dcr_id_linux
-  asn_router   = local.asn_router_r2
-  nva_count    = 1
-
-  network_watcher_name = "${var.network_watcher_name_prefix}${var.location_nonprod}"
-  network_watcher_resource_group_name = var.network_watcher_resource_group_name
-  storage_account_id_flow_logs         = module.storage-account-flow-logs-nonprod.id
-  traffic_analytics_workspace_guid     = module.law.workspace_id
-  traffic_analytics_workspace_id       = module.law.id
-  traffic_analytics_workspace_location = module.law.location
-
-  tags = merge(
-    local.tags,
-    {
-      "env"  = "nonprod"
-      "func" = "hub"
-    }
-  )
-}
-
-# Clear custom route tables from GatewaySubnets
-#
-resource "null_resource" "clear_route_table_prod" {
-  depends_on = [
-    module.transit-vnet-prod
-  ]
-  provisioner "local-exec" {
-    command = <<EOT
-      az network route-table route list \
-        --resource-group "${azurerm_resource_group.rg_demo_avnm.name}" \
-        --route-table-name "${module.transit-vnet-prod.route_table_name_gateway}" \
-        --query "[].name" -o tsv | \
-        xargs -I {} az network route-table route delete \
-          --resource-group "${azurerm_resource_group.rg_demo_avnm.name}" \
-          --route-table-name "${module.transit-vnet-prod.route_table_name_gateway}" \
-          --name {}
-    EOT
-    interpreter = ["/bin/bash", "-c"]
-  }
-}
-
-resource "null_resource" "clear_route_table_nonprod" {
-  depends_on = [
-    module.transit-vnet-nonprod
-  ]
-  provisioner "local-exec" {
-    command = <<EOT
-      az network route-table route list \
-        --resource-group "${azurerm_resource_group.rg_demo_avnm.name}" \
-        --route-table-name "${module.transit-vnet-nonprod.route_table_name_gateway}" \
-        --query "[].name" -o tsv | \
-        xargs -I {} az network route-table route delete \
-          --resource-group "${azurerm_resource_group.rg_demo_avnm.name}" \
-          --route-table-name "${module.transit-vnet-nonprod.route_table_name_gateway}" \
-          --name {}
-    EOT
-    interpreter = ["/bin/bash", "-c"]
-  }
-}
-
-
-# Build production spoke virtual network
-#
-module "workload1-vnet-prod" {
-  depends_on = [
-    null_resource.clear_route_table_prod,
-    azurerm_resource_group.rg_demo_avnm,
-    module.law
-  ]
-
-  source              = "../../modules/vnet/standalone"
-  random_string       = random_string.unique.result
-  location            = var.location_prod
-  location_code       = local.location_code_prod
-  resource_group_name = azurerm_resource_group.rg_demo_avnm.name
-
-  address_space_vnet = local.vnet_cidr_wl1_pri
-  subnet_cidr_app    = cidrsubnet(local.vnet_cidr_wl1_pri, 3, 0)
-  subnet_cidr_svc    = cidrsubnet(local.vnet_cidr_wl1_pri, 3, 1)
-
-  admin_password = var.admin_password
-  admin_username = var.admin_username
-
-  vm_size_web = var.sku_vm_size
-  purpose     = "pwwl1"
-
-  law_resource_id = module.law.id
-  dce_id          = module.law.dce_id_primary
-  dcr_id_linux    = module.law.dcr_id_linux
-
-  network_watcher_name = "${var.network_watcher_name_prefix}${var.location_prod}"
-  network_watcher_resource_group_name = var.network_watcher_resource_group_name
-  storage_account_id_flow_logs         = module.storage-account-flow-logs-prod.id
-  traffic_analytics_workspace_guid     = module.law.workspace_id
-  traffic_analytics_workspace_id       = module.law.id
-  traffic_analytics_workspace_location = module.law.location
-
-  tags = merge(
-    local.tags,
-    {
-      "env"  = "prod"
-      "func" = "spoke"
-      "wl"   = "app1"
-    }
-  )
-}
-
-# Build other spoke virtual networks
-#
-module "workload1-vnet-pci" {
-  depends_on = [
-    null_resource.clear_route_table_prod,
-    azurerm_resource_group.rg_demo_avnm,
-    module.law
-  ]
-
-  source              = "../../modules/vnet/standalone"
-  random_string       = random_string.unique.result
-  location            = var.location_prod
-  location_code       = local.location_code_prod
-  resource_group_name = azurerm_resource_group.rg_demo_avnm.name
-
-  address_space_vnet = local.vnet_cidr_wl2_pri
-  subnet_cidr_app    = cidrsubnet(local.vnet_cidr_wl2_pri, 3, 0)
-  subnet_cidr_svc    = cidrsubnet(local.vnet_cidr_wl2_pri, 3, 1)
-
-  admin_password = var.admin_password
-  admin_username = var.admin_username
-
-  vm_size_web = var.sku_vm_size
-  purpose     = "pciwwl1"
-
-  law_resource_id = module.law.id
-  dce_id          = module.law.dce_id_primary
-  dcr_id_linux    = module.law.dcr_id_linux
-
-  network_watcher_name = "${var.network_watcher_name_prefix}${var.location_prod}"
-  network_watcher_resource_group_name = var.network_watcher_resource_group_name
-  storage_account_id_flow_logs         = module.storage-account-flow-logs-prod.id
-  traffic_analytics_workspace_guid     = module.law.workspace_id
-  traffic_analytics_workspace_id       = module.law.id
-  traffic_analytics_workspace_location = module.law.location
-
-  tags = merge(
-    local.tags,
-    {
-      "env"  = "prod"
-      "func" = "spoke"
-      "data" = "pci"
-    }
-  )
-}
-
-module "workload1-vnet-nonprod" {
-  depends_on = [
-    null_resource.clear_route_table_nonprod,
-    azurerm_resource_group.rg_demo_avnm,
-    module.law
-  ]
-
-  source              = "../../modules/vnet/standalone"
-  random_string       = random_string.unique.result
-  location            = var.location_nonprod
-  location_code       = local.location_code_nonprod
-  resource_group_name = azurerm_resource_group.rg_demo_avnm.name
-
-  address_space_vnet = local.vnet_cidr_wl1_sec
-  subnet_cidr_app    = cidrsubnet(local.vnet_cidr_wl1_sec, 3, 0)
-  subnet_cidr_svc    = cidrsubnet(local.vnet_cidr_wl1_sec, 3, 1)
-
-  admin_password = var.admin_password
-  admin_username = var.admin_username
-
-  vm_size_web = var.sku_vm_size
-  purpose     = "npwwl1"
-
-  law_resource_id = module.law.id
-  dce_id          = module.law.dce_id_secondary
-  dcr_id_linux    = module.law.dcr_id_linux
-
-  network_watcher_name = "${var.network_watcher_name_prefix}${var.location_nonprod}"
-  network_watcher_resource_group_name = var.network_watcher_resource_group_name
-  storage_account_id_flow_logs         = module.storage-account-flow-logs-nonprod.id
-  traffic_analytics_workspace_guid     = module.law.workspace_id
-  traffic_analytics_workspace_id       = module.law.id
-  traffic_analytics_workspace_location = module.law.location
-
-  tags = merge(
-    local.tags,
-    {
-      "env"  = "nonprod"
-      "func" = "spoke"
-      "wl"   = "app1"
-    }
-  )
-}
-
-# Add virtual machines that will host mysql to the spoke virtual networks for production and non-production
-#
-module "workload1-vm-db-prod" {
-  depends_on = [
-    azurerm_resource_group.rg_demo_avnm,
-    module.law,
-    module.workload1-vnet-prod
-  ]
-
-  source              = "../../modules/virtual-machine/ubuntu-tools"
-  random_string       = random_string.unique.result
-  location            = var.location_prod
-  location_code       = local.location_code_prod
-  resource_group_name = azurerm_resource_group.rg_demo_avnm.name
-
-  purpose        = "pdwl1"
-  admin_username = var.admin_username
-  admin_password = var.admin_password
-
-  vm_size = var.sku_vm_size
-  image_reference = {
-    publisher = local.image_preference_publisher
-    offer     = local.image_preference_offer
-    sku       = local.image_preference_sku
-    version   = local.image_preference_version
-  }
-
-  subnet_id                     = module.workload1-vnet-prod.subnet_id_svc
-  private_ip_address_allocation = "Static"
-  nic_private_ip_address        = cidrhost(cidrsubnet(local.vnet_cidr_wl1_pri, 3, 1), 20)
-
-  law_resource_id = module.law.id
-  dce_id          = module.law.dce_id_primary
-  dcr_id          = module.law.dcr_id_linux
-
-  tags = var.tags
-}
-
-module "workload1-vm-db-nonprod" {
-  depends_on = [
-    azurerm_resource_group.rg_demo_avnm,
-    module.law,
-    module.workload1-vnet-nonprod
-  ]
-
-  source              = "../../modules/virtual-machine/ubuntu-tools"
-  random_string       = random_string.unique.result
-  location            = var.location_nonprod
-  location_code       = local.location_code_nonprod
-  resource_group_name = azurerm_resource_group.rg_demo_avnm.name
-
-  purpose        = "npdwl1"
-  admin_username = var.admin_username
-  admin_password = var.admin_password
-
-  vm_size = var.sku_vm_size
-  image_reference = {
-    publisher = local.image_preference_publisher
-    offer     = local.image_preference_offer
-    sku       = local.image_preference_sku
-    version   = local.image_preference_version
-  }
-
-  subnet_id                     = module.workload1-vnet-nonprod.subnet_id_svc
-  private_ip_address_allocation = "Static"
-  nic_private_ip_address        = cidrhost(cidrsubnet(local.vnet_cidr_wl1_sec, 3, 1), 20)
-
-  law_resource_id = module.law.id
-  dce_id          = module.law.dce_id_secondary
-  dcr_id          = module.law.dcr_id_linux
-
-  tags = var.tags
-}
-
-## Create Central IT Azure Virtual Network Manager Instance
+## Create a Log Analytics Workspace for resources to centrally log to
 ##
-module "avnm_centralit" {
-  depends_on = [
-    azurerm_resource_group.rg_demo_avnm,
-    module.workload1-vnet-prod,
-    module.workload1-vnet-nonprod,
-    module.workload1-vnet-pci,
-    module.transit-vnet-prod,
-    module.transit-vnet-nonprod,
-    module.workload1-vm-db-prod,
-    module.workload1-vm-db-nonprod
-  ]
-  source = "./manager"
-
-  name                = "avnmcentralit${random_string.unique.result}"
-  location            = var.location_prod
+resource "azurerm_log_analytics_workspace" "law" {
+  name                = "lawavnm${local.location_code_prod}${random_string.unique.result}"
+  location            = var.region_prod
   resource_group_name = azurerm_resource_group.rg_demo_avnm.name
-  law_resource_id     = module.law.id
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
 
-  description = "The Central IT Azure Virtual Network Manager instance"
+  tags = var.tags
+}
 
-  management_scope = {
+## Create a storage account to store VNet flow logs for each environment
+##
+resource "azurerm_storage_account" "storage_account_flow_logs" {
+  for_each = toset(local.hub_environments)
+
+  name                = "stflowlog${each.key}${each.key == "prod" ? local.location_code_prod : local.location_code_nonprod}${random_string.unique.result}"
+  resource_group_name = azurerm_resource_group.rg_demo_avnm.name
+  location            = each.key == "prod" ? var.region_prod : var.region_nonprod
+  tags                = local.tags
+
+  account_kind                    = "StorageV2"
+  account_tier                    = "Standard"
+  account_replication_type        = "LRS"
+  shared_access_key_enabled       = false
+  allow_nested_items_to_be_public = false
+
+  network_rules {
+
+    # Configure the default action for public network access to block all traffic
+    default_action = "Deny"
+
+    # Configure the service to allow trusted Azure services to bypass the service firewall to support VNet flow log delivery
+    bypass = [
+      "AzureServices"
+    ]
+    # Allow the trusted IP to bypass the firewall. In most cases this will be the IP you use to demo and the machine being used
+    # to deploy the Teraform code
+    ip_rules = var.trusted_ips
+  }
+}
+
+## Configure diagnostic settings for blob and table endpoints for the storage accounts
+##
+resource "azurerm_monitor_diagnostic_setting" "diag_blob" {
+  depends_on = [
+    azurerm_storage_account.storage_account_flow_logs
+  ]
+
+  for_each = toset(local.hub_environments)
+
+  name                       = "diag-blob"
+  target_resource_id         = "${azurerm_storage_account.storage_account_flow_logs[each.key].id}/blobServices/default"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.law.id
+
+  enabled_log {
+    category = "StorageRead"
+  }
+
+  enabled_log {
+    category = "StorageWrite"
+  }
+
+  enabled_log {
+    category = "StorageDelete"
+  }
+}
+
+resource "azurerm_monitor_diagnostic_setting" "diag_table" {
+  depends_on = [
+    azurerm_storage_account.storage_account_flow_logs,
+    azurerm_monitor_diagnostic_setting.diag_blob
+  ]
+
+  for_each = toset(local.hub_environments)
+
+  name                       = "diag-table"
+  target_resource_id         = "${azurerm_storage_account.storage_account_flow_logs[each.key].id}/tableServices/default"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.law.id
+
+  enabled_log {
+    category = "StorageRead"
+  }
+
+  enabled_log {
+    category = "StorageWrite"
+  }
+
+  enabled_log {
+    category = "StorageDelete"
+  }
+}
+
+#################### Create resources used for logging
+####################
+
+## Create transit virtual networks and their components
+module "transit_vnet" {
+  for_each = toset(local.hub_environments)
+
+  source = "./modules/transit-vnet"
+
+  address_space_vnet                  = [each.key == "prod" ? local.vnet_cidr_tr_prod : local.vnet_cidr_tr_nonprod]
+  bastion                             = each.key == "prod" ? true : false
+  environment                         = each.key
+  law_region                          = var.region_prod
+  law_resource_id                     = azurerm_log_analytics_workspace.law.id
+  law_workspace_id                    = azurerm_log_analytics_workspace.law.workspace_id
+  random_string                       = random_string.unique.result
+  region                              = each.key == "prod" ? var.region_prod : var.region_nonprod
+  region_code                         = each.key == "prod" ? local.location_code_prod : local.location_code_nonprod
+  resource_group_name_network_watcher = var.network_watcher_resource_group_name
+  resource_group_name_workload        = azurerm_resource_group.rg_demo_avnm.name
+  storage_account_vnet_flow_logs      = azurerm_storage_account.storage_account_flow_logs[each.key].id
+  tags                                = var.tags
+  tags_vnet                           = { "env" = each.key, "func" = "hub" }
+  vm_admin_username                   = var.vm_admin_username
+  vm_admin_password                   = var.vm_admin_password
+  vm_sku_size                         = var.vm_sku_size
+}
+
+## Create workload virtual networks and their components
+##
+module "workload_vnets" {
+  depends_on = [module.transit_vnet]
+
+  for_each = { for idx, env in local.workload_environments : env.env => env }
+
+  source = "./modules/workload-vnet"
+
+  address_space_vnet                  = [each.value.address_space]
+  db_vm                               = each.value.db_vm
+  environment                         = each.value.env
+  law_region                          = var.region_prod
+  law_resource_id                     = azurerm_log_analytics_workspace.law.id
+  law_workspace_id                    = azurerm_log_analytics_workspace.law.workspace_id
+  random_string                       = random_string.unique.result
+  region                              = each.value.region
+  region_code                         = each.value.region_code
+  resource_group_name_network_watcher = var.network_watcher_resource_group_name
+  resource_group_name_workload        = azurerm_resource_group.rg_demo_avnm.name
+  storage_account_vnet_flow_logs      = contains(["prod", "pci"], each.value.env) ? azurerm_storage_account.storage_account_flow_logs["prod"].id : azurerm_storage_account.storage_account_flow_logs["nonprod"].id
+  tags                                = var.tags
+  tags_vnet                           = contains(["prod", "nonprod"], each.value.env) ? { "env" = each.value.env, "func" = "spoke", "wl" = "app1" } : { "env" = "prod", "func" = "spoke", "data" = "pci" }
+  vm_admin_username                   = var.vm_admin_username
+  vm_admin_password                   = var.vm_admin_password
+  vm_sku_size                         = var.vm_sku_size
+}
+
+#################### Create central AVNM resources
+####################
+
+## Create Azure Virtual Network Manager and configure diagnostic settings
+##
+resource "azurerm_network_manager" "network_manager_central" {
+  depends_on = [
+    module.workload_vnets
+  ]
+
+  name                = "avnmcentral${random_string.unique.result}"
+  description         = "The Central IT Azure Virtual Network Manager instance"
+  location            = var.region_prod
+  resource_group_name = azurerm_resource_group.rg_demo_avnm.name
+
+  # Set scope of management to management group allowing it to manage all subscriptions beneath
+  scope {
     management_group_ids = [
       var.management_group_id
     ]
   }
-  configurations_supported = [
-    "SecurityAdmin",
+
+  # Set scope of access to enable it to manage connectivity, securityadmin, and routing configurations
+  scope_accesses = [
     "Connectivity",
+    "SecurityAdmin",
     "Routing"
   ]
-
-  tags = local.tags
+  tags = var.tags
 }
 
-##### Build resources required for Central IT Azure Virtual Network Manager Instance
+resource "azurerm_monitor_diagnostic_setting" "diag_avnm_central" {
+  name                       = "diag-base"
+  target_resource_id         = azurerm_network_manager.network_manager_central.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.law.id
+
+  enabled_log {
+    category = "NetworkGroupMembershipChange"
+  }
+
+  enabled_log {
+    category = "RuleCollectionChange"
+  }
+
+  enabled_log {
+    category = "ConnectivityConfigurationChange"
+  }
+}
+
+########## Create Network Groups
+##########
+
+##### Create Network Groups used across Routing, Configuration, and SecurityAdmin Configurations
 #####
 
-### Create Network Groups
-###
+## Create a network group for the production spoke virtual networks
+##
+resource "azurerm_network_manager_network_group" "network_group_central_spoke_prod" {
+  name               = "ng-spoke-prod"
+  description        = "The network group for spokes in production"
+  network_manager_id = azurerm_network_manager.network_manager_central.id
+}
 
-# Network Groups used in Routing Configurations
-#
+## Create a network group for the non-production spoke virtual networks
+##
+resource "azurerm_network_manager_network_group" "network_group_central_spoke_nonprod" {
+  name               = "ng-spoke-nonprod"
+  description        = "The network group for spokes in non-production"
+  network_manager_id = azurerm_network_manager.network_manager_central.id
+}
+
+##### Create Network Groups used with Routing Configurations
+##### AzApi is used to create Network Groups with subnet members because that is not yet supported
+##### by AzureRm as of 4.44
+
+## Create a network group for the production Gateway Subnet to be used with a routing configuration
 resource "azapi_resource" "network_group_central_gatewaysubnet_prod" {
   depends_on = [
-    module.avnm_centralit
+    azurerm_network_manager.network_manager_central
   ]
 
   type                      = "Microsoft.Network/networkManagers/networkGroups@2024-05-01"
   name                      = "ng-subnet-gatewaysubnet-prod"
-  parent_id                 = module.avnm_centralit.id
+  parent_id                 = azurerm_network_manager.network_manager_central.id
   schema_validation_enabled = true
 
   body = {
@@ -498,14 +274,15 @@ resource "azapi_resource" "network_group_central_gatewaysubnet_prod" {
   }
 }
 
+## Create a network group for the non-production Gateway Subnet to be used with a routing configuration
 resource "azapi_resource" "network_group_central_gatewaysubnet_nonprod" {
   depends_on = [
-    module.avnm_centralit
+    azurerm_network_manager.network_manager_central
   ]
 
   type                      = "Microsoft.Network/networkManagers/networkGroups@2024-05-01"
   name                      = "ng-subnet-gatewaysubnet-nonprod"
-  parent_id                 = module.avnm_centralit.id
+  parent_id                 = azurerm_network_manager.network_manager_central.id
   schema_validation_enabled = true
 
   body = {
@@ -516,14 +293,15 @@ resource "azapi_resource" "network_group_central_gatewaysubnet_nonprod" {
   }
 }
 
+## Create a network group for the production and non-production subnets to enable cross region routing
 resource "azapi_resource" "network_group_central_fwintsubnet" {
   depends_on = [
-    module.avnm_centralit
+    azurerm_network_manager.network_manager_central
   ]
 
   type                      = "Microsoft.Network/networkManagers/networkGroups@2024-05-01"
   name                      = "ng-subnet-fwint-prod"
-  parent_id                 = module.avnm_centralit.id
+  parent_id                 = azurerm_network_manager.network_manager_central.id
   schema_validation_enabled = true
 
   body = {
@@ -534,71 +312,73 @@ resource "azapi_resource" "network_group_central_fwintsubnet" {
   }
 }
 
-# Network Groups used in Connectivity configurations
-#
-resource "azurerm_network_manager_network_group" "network_group_central_hub_all" {
-  name               = "ng-hub-all"
-  description        = "The network group containing all hubs across all environments and regions"
-  network_manager_id = module.avnm_centralit.id
+##### Create Network Groups used with Connectivity Configurations
+#####
+
+## Create a network group for the production and non-production hubs
+##
+resource "azurerm_network_manager_network_group" "network_group_central_transit_all" {
+  name               = "ng-transit-all"
+  description        = "The network group containing all transit virtual network across all environments and regions"
+  network_manager_id = azurerm_network_manager.network_manager_central.id
 }
 
+## Create a network group for the spoke virtual networks containing application 1 workloads
+##
 resource "azurerm_network_manager_network_group" "network_group_central_app1" {
   name               = "ng-spoke-app1"
   description        = "The network group containing application 1 workloads in both production and non-production"
-  network_manager_id = module.avnm_centralit.id
+  network_manager_id = azurerm_network_manager.network_manager_central.id
 }
 
-# Network Groups used in Routing Configuration, Connectivity Configurations, and Security Admin Rule Configuration
-#
-resource "azurerm_network_manager_network_group" "network_group_central_spoke_prod" {
-  name               = "ng-spoke-prod"
-  description        = "The network group for spokes in production"
-  network_manager_id = module.avnm_centralit.id
-}
+##### Create Network Groups used with SecurityAdmin Configurations
+##### AzApi is used to create Network Groups with subnet members because that is not yet supported
+##### by AzureRm as of 4.44
 
-resource "azurerm_network_manager_network_group" "network_group_central_spoke_nonprod" {
-  name               = "ng-spoke-nonprod"
-  description        = "The network group for spokes in non-production"
-  network_manager_id = module.avnm_centralit.id
-}
-
-# Network Groups used in Security Admin Rule Configurations
-#
+## Create a network group for the spoke virtual networks containing PCI workloads
+##
 resource "azurerm_network_manager_network_group" "network_group_central_spoke_all_pci" {
   name               = "ng-spoke-all-pci"
   description        = "The network group for spokes running PCI workloads"
-  network_manager_id = module.avnm_centralit.id
+  network_manager_id = azurerm_network_manager.network_manager_central.id
 }
 
-resource "azurerm_network_manager_network_group" "network_group_central_spoke_exceptions" {
-  name               = "ng-spoke-exceptions"
-  description        = "The network group for spokes that have an exception to all Security Admin rules"
-  network_manager_id = module.avnm_centralit.id
-}
-
+## Create a network group for the subnets where application 1 non-production database servers are deployed to
+##
 resource "azapi_resource" "network_group_central_subnet_app1_db_nonprod" {
   depends_on = [
-    module.avnm_centralit
+    azurerm_network_manager.network_manager_central
   ]
 
   type                      = "Microsoft.Network/networkManagers/networkGroups@2024-05-01"
   name                      = "ng-subnet-app1-db-nonprod"
-  parent_id                 = module.avnm_centralit.id
+  parent_id                 = azurerm_network_manager.network_manager_central.id
   schema_validation_enabled = true
 
   body = {
     properties = {
-      description = "The network group contains ccontains subnets where application 1 database servers are deployed in non-production"
+      description = "The network group contains subnets where application 1 non-production database servers are deployed to"
       memberType  = "Subnet"
     }
   }
 }
 
-# Add static members to network groups
-#
+## Create a network group for the spoke virtual networks that should be exempted SecurityAdmin rules
+## This will be associated with an allow all traffic SecurityAdmin rule
+resource "azurerm_network_manager_network_group" "network_group_central_spoke_exceptions" {
+  name               = "ng-spoke-exceptions"
+  description        = "The network group for spokes that have an exception to all Security Admin rules"
+  network_manager_id = azurerm_network_manager.network_manager_central.id
+}
+
+##### Create Network Group Static Members to groups which are configured for subnet membership
+#####
+
+## Add the application 1 non-production database subnet to the relevant network group
+##
 resource "azapi_resource" "static_member_central_subnet_app1_db_nonprod" {
   depends_on = [
-    module.avnm_centralit,
+    azurerm_network_manager.network_manager_central,
     azapi_resource.network_group_central_subnet_app1_db_nonprod
   ]
 
@@ -609,14 +389,16 @@ resource "azapi_resource" "static_member_central_subnet_app1_db_nonprod" {
 
   body = {
     properties = {
-      resourceId = module.workload1-vnet-nonprod.subnet_id_svc
+      resourceId = module.workload_vnets["nonprod"].subnet_id_data
     }
   }
 }
 
+## Add the production GatewaySubnet to the relevant network group
+##
 resource "azapi_resource" "static_member_central_subnet_gatewaysubnet_prod" {
   depends_on = [
-    module.avnm_centralit,
+    azurerm_network_manager.network_manager_central,
     azapi_resource.network_group_central_gatewaysubnet_prod
   ]
 
@@ -627,14 +409,16 @@ resource "azapi_resource" "static_member_central_subnet_gatewaysubnet_prod" {
 
   body = {
     properties = {
-      resourceId = module.transit-vnet-prod.subnet_id_gateway
+      resourceId = module.transit_vnet["prod"].subnet_id_gateway
     }
   }
 }
 
+## Add the non-production GatewaySubnet to the relevant network group
+##
 resource "azapi_resource" "static_member_central_subnet_gatewaysubnet_nonprod" {
   depends_on = [
-    module.avnm_centralit,
+    azurerm_network_manager.network_manager_central,
     azapi_resource.network_group_central_gatewaysubnet_nonprod
   ]
 
@@ -645,14 +429,16 @@ resource "azapi_resource" "static_member_central_subnet_gatewaysubnet_nonprod" {
 
   body = {
     properties = {
-      resourceId = module.transit-vnet-nonprod.subnet_id_gateway
+      resourceId = module.transit_vnet["nonprod"].subnet_id_gateway
     }
   }
 }
 
+## Add the production firewall private subnet to the relevant network group
+##
 resource "azapi_resource" "static_member_central_subnet_fwintsubnet_prod" {
   depends_on = [
-    module.avnm_centralit,
+    azurerm_network_manager.network_manager_central,
     azapi_resource.network_group_central_fwintsubnet
   ]
 
@@ -663,14 +449,16 @@ resource "azapi_resource" "static_member_central_subnet_fwintsubnet_prod" {
 
   body = {
     properties = {
-      resourceId = module.transit-vnet-prod.subnet_id_firewall_private
+      resourceId = module.transit_vnet["prod"].subnet_id_firewall_private
     }
   }
 }
 
+## Add the non-production firewall private subnet to the relevant network group
+##
 resource "azapi_resource" "static_member_central_subnet_fwintsubnet_nonprod" {
   depends_on = [
-    module.avnm_centralit,
+    azurerm_network_manager.network_manager_central,
     azapi_resource.network_group_central_fwintsubnet
   ]
 
@@ -681,35 +469,390 @@ resource "azapi_resource" "static_member_central_subnet_fwintsubnet_nonprod" {
 
   body = {
     properties = {
-      resourceId = module.transit-vnet-nonprod.subnet_id_firewall_private
+      resourceId = module.transit_vnet["nonprod"].subnet_id_firewall_private
     }
   }
 }
 
-### Security Admin Configuration and supporting resources
-###
+########## Create Connectivity Configurations
+##########
 
-# Create Security Admin Configuration
-#
-resource "azapi_resource" "security_config_central" {
+## Create the central connectivity configuration for hub and spoke in the production environment
+##
+resource "azurerm_network_manager_connectivity_configuration" "connectivity_config_central_prod_hubspoke" {
   depends_on = [
-    module.avnm_centralit,
-    azurerm_network_manager_network_group.network_group_central_hub_all,
-    azurerm_network_manager_network_group.network_group_central_app1,
-    azurerm_network_manager_network_group.network_group_central_spoke_prod,
-    azurerm_network_manager_network_group.network_group_central_spoke_nonprod,
-    azurerm_network_manager_network_group.network_group_central_spoke_all_pci,
-    azurerm_network_manager_network_group.network_group_central_spoke_exceptions,
-    azapi_resource.network_group_central_subnet_app1_db_nonprod
+    azurerm_network_manager.network_manager_central
   ]
-  type                      = "Microsoft.Network/networkManagers/securityAdminConfigurations@2024-05-01"
-  name                      = "cfg-sec"
-  parent_id                 = module.avnm_centralit.id
+
+  name                  = "cfg-connectivity-prod-hubspoke"
+  network_manager_id    = azurerm_network_manager.network_manager_central.id
+  connectivity_topology = "HubAndSpoke"
+
+  # This is false because DirectConnectivity is not used in this configuration
+  global_mesh_enabled = false
+
+  # Delete existing peers and create the AVNM-managed peerings
+  delete_existing_peering_enabled = true
+
+  applies_to_group {
+    group_connectivity = "None"
+    network_group_id   = azurerm_network_manager_network_group.network_group_central_spoke_prod.id
+    use_hub_gateway    = true
+  }
+
+  hub {
+    resource_id   = module.transit_vnet["prod"].transit_vnet_id
+    resource_type = "Microsoft.Network/virtualNetworks"
+  }
+}
+
+## Create the central connectivity configuration for hub and spoke in the non-production environment
+##
+resource "azurerm_network_manager_connectivity_configuration" "connectivity_config_central_nonprod_hubspoke" {
+  depends_on = [
+    azurerm_network_manager.network_manager_central
+  ]
+
+  name                  = "cfg-connectivity-nonprod-hubspoke"
+  network_manager_id    = azurerm_network_manager.network_manager_central.id
+  connectivity_topology = "HubAndSpoke"
+
+  # This is false because DirectConnectivity is not used in this configuration
+  global_mesh_enabled = false
+
+  # Delete existing peers and create the AVNM-managed peerings
+  delete_existing_peering_enabled = true
+
+  applies_to_group {
+    group_connectivity = "None"
+    network_group_id   = azurerm_network_manager_network_group.network_group_central_spoke_nonprod.id
+    use_hub_gateway    = true
+  }
+
+  hub {
+    resource_id   = module.transit_vnet["nonprod"].transit_vnet_id
+    resource_type = "Microsoft.Network/virtualNetworks"
+  }
+}
+
+## Create the central connectivity configuration to mesh the hubs across environments
+##
+resource "azurerm_network_manager_connectivity_configuration" "connectivity_config_central_all_mesh_hubs" {
+  depends_on = [
+    azurerm_network_manager.network_manager_central
+  ]
+
+  name                  = "cfg-connectivity-all-mesh-hubs"
+  network_manager_id    = azurerm_network_manager.network_manager_central.id
+  connectivity_topology = "Mesh"
+
+  # Do not mesh spoke virtual networks
+  global_mesh_enabled = true
+
+  # Delete existing peers and create the AVNM-managed peerings
+  delete_existing_peering_enabled = true
+
+  applies_to_group {
+    group_connectivity = "DirectlyConnected"
+    network_group_id   = azurerm_network_manager_network_group.network_group_central_transit_all.id
+  }
+}
+
+## Create the central connectivity configuration to mesh the application 1 workload spoke virtual networks
+##
+resource "azurerm_network_manager_connectivity_configuration" "connectivity_config_central_all_mesh_app1_spokes" {
+  depends_on = [
+    azurerm_network_manager.network_manager_central
+  ]
+
+  name                  = "cfg-connectivity-all-mesh-app1-spokes"
+  network_manager_id    = azurerm_network_manager.network_manager_central.id
+  connectivity_topology = "Mesh"
+
+  # Do not mesh spoke virtual networks
+  global_mesh_enabled = true
+
+  # Delete existing peers and create the AVNM-managed peerings
+  delete_existing_peering_enabled = true
+
+  applies_to_group {
+    group_connectivity = "DirectlyConnected"
+    network_group_id   = azurerm_network_manager_network_group.network_group_central_app1.id
+  }
+}
+
+########## Create Routing Configuration, rule collections, and rules
+########## AzAPI is used to create routing rules because they are not yet supported by AzureRm as of 4.44
+
+##### Create Routing Configuration
+#####
+
+## Create a the central routing configuration
+##
+resource "azurerm_network_manager_routing_configuration" "routing_config_central" {
+  depends_on = [
+    azurerm_network_manager.network_manager_central
+  ]
+
+  name               = "cfg-routing"
+  description        = "The routing configuration for Central IT"
+  network_manager_id = azurerm_network_manager.network_manager_central.id
+}
+
+##### Create Routing Rule Collections and rules
+#####
+
+## Create the routing rule collection for production spoke virtual networks and its relevant rule
+## to route traffic from the production spoke virtual network to the production NVA load balancer
+resource "azurerm_network_manager_routing_rule_collection" "routing_rule_collection_prod_spokes" {
+  name                     = "rc-route-prod-spokes"
+  description              = "The routing rule collection to apply to production spokes"
+  routing_configuration_id = azurerm_network_manager_routing_configuration.routing_config_central.id
+  network_group_ids = [
+    azurerm_network_manager_network_group.network_group_central_spoke_prod.id
+  ]
+  bgp_route_propagation_enabled = false
+}
+
+resource "azapi_resource" "routing_rule_prod_spokes_default" {
+  depends_on = [
+    azurerm_network_manager_routing_rule_collection.routing_rule_collection_prod_spokes
+  ]
+
+  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
+  name                      = "defaultRoute"
+  parent_id                 = azurerm_network_manager_routing_rule_collection.routing_rule_collection_prod_spokes.id
   schema_validation_enabled = true
 
   body = {
     properties = {
-      description = "The security configuration for Central IT"
+      description = "The rule to point the default route to the production NVA load balancer"
+      destination = {
+        type               = "AddressPrefix"
+        destinationAddress = "0.0.0.0/0"
+      }
+      nextHop = {
+        nextHopType    = "VirtualAppliance"
+        nextHopAddress = module.transit_vnet["prod"].lb_trusted_ip
+      }
+    }
+  }
+}
+
+## Create the routing rule collection for non-production spoke virtual networks and its relevant rule
+## to route traffic from the non-production spoke virtual network to the non-production NVA load balancer
+resource "azurerm_network_manager_routing_rule_collection" "routing_rule_collection_nonprod_spokes" {
+  name                     = "rc-route-nonprod-spokes"
+  description              = "The routing rule collection to apply to non-production spokes"
+  routing_configuration_id = azurerm_network_manager_routing_configuration.routing_config_central.id
+  network_group_ids = [
+    azurerm_network_manager_network_group.network_group_central_spoke_nonprod.id
+  ]
+  bgp_route_propagation_enabled = false
+}
+
+resource "azapi_resource" "routing_rule_nonprod_spokes_default" {
+  depends_on = [
+    azurerm_network_manager_routing_rule_collection.routing_rule_collection_nonprod_spokes
+  ]
+
+  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
+  name                      = "defaultRoute"
+  parent_id                 = azurerm_network_manager_routing_rule_collection.routing_rule_collection_nonprod_spokes.id
+  schema_validation_enabled = true
+
+  body = {
+    properties = {
+      description = "The rule to point the default route to the non-production NVA load balancer"
+      destination = {
+        type               = "AddressPrefix"
+        destinationAddress = "0.0.0.0/0"
+      }
+      nextHop = {
+        nextHopType    = "VirtualAppliance"
+        nextHopAddress = module.transit_vnet["nonprod"].lb_trusted_ip
+      }
+    }
+  }
+}
+
+## Create a routing rule collection for the production GatewaySubnets and relevant rules to route
+## traffic from on-premises to spoke virtual networks to the production NVA load balancer
+resource "azurerm_network_manager_routing_rule_collection" "routing_rule_collection_prod_gatewaysubnet" {
+  name                     = "rc-route-prod-gatewaysubnet"
+  description              = "The routing rule collection to apply to the production GatewaySubnet"
+  routing_configuration_id = azurerm_network_manager_routing_configuration.routing_config_central.id
+  network_group_ids = [
+    azapi_resource.network_group_central_gatewaysubnet_prod.id
+  ]
+  bgp_route_propagation_enabled = true
+}
+
+resource "azapi_resource" "routing_rule_prod_gatewaysubnet_prodvnet" {
+  depends_on = [
+    azurerm_network_manager_routing_rule_collection.routing_rule_collection_prod_gatewaysubnet
+  ]
+  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
+  name                      = "prodvnet1"
+  parent_id                 = azurerm_network_manager_routing_rule_collection.routing_rule_collection_prod_gatewaysubnet.id
+  schema_validation_enabled = true
+
+  body = {
+    properties = {
+      description = "The rule to route traffic from on-premises to production spoke 1 to the NVA"
+      destination = {
+        type               = "AddressPrefix"
+        destinationAddress = local.vnet_cidr_wl1_prod
+      }
+      nextHop = {
+        nextHopType    = "VirtualAppliance"
+        nextHopAddress = module.transit_vnet["prod"].lb_trusted_ip
+      }
+    }
+  }
+}
+
+resource "azapi_resource" "routing_rule_prod_gatewaysubnet_pcivnet" {
+  depends_on = [
+    azurerm_network_manager_routing_rule_collection.routing_rule_collection_prod_gatewaysubnet
+  ]
+  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
+  name                      = "pcivnet1"
+  parent_id                 = azurerm_network_manager_routing_rule_collection.routing_rule_collection_prod_gatewaysubnet.id
+  schema_validation_enabled = true
+
+  body = {
+    properties = {
+      description = "The rule to route traffic from on-premises to production spoke 1 to the NVA"
+      destination = {
+        type               = "AddressPrefix"
+        destinationAddress = local.vnet_cidr_wl1_pci
+      }
+      nextHop = {
+        nextHopType    = "VirtualAppliance"
+        nextHopAddress = module.transit_vnet["prod"].lb_trusted_ip
+      }
+    }
+  }
+}
+
+## Create a routing rule collection for the non-production GatewaySubnets and relevant rules to route
+## traffic from on-premises to spoke virtual networks to the non-production NVA load balancer
+resource "azurerm_network_manager_routing_rule_collection" "routing_rule_collection_nonprod_gatewaysubnet" {
+  name                     = "rc-route-nonprod-gatewaysubnet"
+  description              = "The routing rule collection to apply to the non-production GatewaySubnet"
+  routing_configuration_id = azurerm_network_manager_routing_configuration.routing_config_central.id
+  network_group_ids = [
+    azapi_resource.network_group_central_gatewaysubnet_nonprod.id
+  ]
+  bgp_route_propagation_enabled = true
+}
+
+resource "azapi_resource" "routing_rule_nonprod_gatewaysubnet_nonprodvnet" {
+  depends_on = [
+    azurerm_network_manager_routing_rule_collection.routing_rule_collection_nonprod_gatewaysubnet
+  ]
+  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
+  name                      = "nonprodvnet1"
+  parent_id                 = azurerm_network_manager_routing_rule_collection.routing_rule_collection_nonprod_gatewaysubnet.id
+  schema_validation_enabled = true
+
+  body = {
+    properties = {
+      description = "The rule to route traffic from on-premises to non-production spoke 1 to the NVA"
+      destination = {
+        type               = "AddressPrefix"
+        destinationAddress = local.vnet_cidr_wl1_nonprod
+      }
+      nextHop = {
+        nextHopType    = "VirtualAppliance"
+        nextHopAddress = module.transit_vnet["nonprod"].lb_trusted_ip
+      }
+    }
+  }
+}
+
+## Create a routing rule collection for production and non-production trusted firewall subnets and the relevant
+## rules to enable cross region routing
+resource "azurerm_network_manager_routing_rule_collection" "routing_rule_collection_trusted_firewall_subnets" {
+  name                     = "rc-route-trusted-firewall-subnets"
+  description              = "The routing rule collection to apply to trusted firewall subnets for cross region routing"
+  routing_configuration_id = azurerm_network_manager_routing_configuration.routing_config_central.id
+  network_group_ids = [
+    azapi_resource.network_group_central_fwintsubnet.id
+  ]
+  bgp_route_propagation_enabled = true
+}
+
+# Create routing rule to route traffic to production CIDR block to production NVA trusted load balancer
+#
+resource "azapi_resource" "routing_rule_prod_cidr" {
+  depends_on = [
+    azurerm_network_manager_routing_rule_collection.routing_rule_collection_trusted_firewall_subnets
+  ]
+  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
+  name                      = "prod_cidr"
+  parent_id                 = azurerm_network_manager_routing_rule_collection.routing_rule_collection_trusted_firewall_subnets.id
+  schema_validation_enabled = true
+
+  body = {
+    properties = {
+      description = "The rule to route traffic destined for the production environment to the production NVA"
+      destination = {
+        type               = "AddressPrefix"
+        destinationAddress = var.address_space_azure_prod
+      }
+      nextHop = {
+        nextHopType    = "VirtualAppliance"
+        nextHopAddress = module.transit_vnet["prod"].lb_trusted_ip
+      }
+    }
+  }
+}
+
+# Create routing rule to route traffic to non-production CIDR block to non-production NVA trusted load balancer
+#
+resource "azapi_resource" "routing_rule_nonprod_cidr" {
+  depends_on = [
+    azurerm_network_manager_routing_rule_collection.routing_rule_collection_trusted_firewall_subnets
+  ]
+  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
+  name                      = "nonprod_cidr"
+  parent_id                 = azurerm_network_manager_routing_rule_collection.routing_rule_collection_trusted_firewall_subnets.id
+  schema_validation_enabled = true
+
+  body = {
+    properties = {
+      description = "The rule to route traffic destined for the non-production environment to the non-production NVA"
+      destination = {
+        type               = "AddressPrefix"
+        destinationAddress = var.address_space_azure_nonprod
+      }
+      nextHop = {
+        nextHopType    = "VirtualAppliance"
+        nextHopAddress = module.transit_vnet["nonprod"].lb_trusted_ip
+      }
+    }
+  }
+}
+
+########## Create SecurityAdmin Configuration, rule collections, and rules
+########## AzApi is used for SecurityAdmin rules where Network Groups are used as source or destination because this is not supported in AzureRm as of 4.44
+
+##### Create SecurityAdmin Configuration
+#####
+
+## Create central SecurityAdmin Configuration
+## AzApi is used because AzureRm does not support networkGroupAddressSpaceAggregationOption as of 4.44
+resource "azapi_resource" "security_config_central" {
+  type                      = "Microsoft.Network/networkManagers/securityAdminConfigurations@2024-05-01"
+  name                      = "cfg-security_admin"
+  parent_id                 = azurerm_network_manager.network_manager_central.id
+  schema_validation_enabled = true
+
+  body = {
+    properties = {
+      description = "The SecurityAdmin configuration for Central IT"
       applyOnNetworkIntentPolicyBasedServices = [
         "AllowRulesOnly"
       ]
@@ -719,8 +862,11 @@ resource "azapi_resource" "security_config_central" {
   }
 }
 
-# Create Azure Virtual Network Manager Security Admin Rule Collections
-#
+##### Create SecurityAdmin Rule Collections and SecurityAdmin Rules
+#####
+
+## Create SecurityAdmin Rule Collection and its rules which will apply SecurityAdmin rules to production spoke virtual networks
+##
 resource "azurerm_network_manager_admin_rule_collection" "rule_collection_central_sec_prod" {
   name                            = "rc-prod"
   description                     = "The rule collection for production"
@@ -730,34 +876,7 @@ resource "azurerm_network_manager_admin_rule_collection" "rule_collection_centra
   ]
 }
 
-resource "azurerm_network_manager_admin_rule_collection" "rule_collection_central_sec_nonprod" {
-  name                            = "rc-nonprod"
-  description                     = "The rule collection for non-production"
-  security_admin_configuration_id = azapi_resource.security_config_central.id
-  network_group_ids = [
-    azurerm_network_manager_network_group.network_group_central_spoke_nonprod.id
-  ]
-}
-
-resource "azurerm_network_manager_admin_rule_collection" "rule_collection_central_sec_pci" {
-  name                            = "rc-pci"
-  description                     = "The rule collection for PCI workloads"
-  security_admin_configuration_id = azapi_resource.security_config_central.id
-  network_group_ids = [
-    azurerm_network_manager_network_group.network_group_central_spoke_all_pci.id
-  ]
-}
-
-resource "azurerm_network_manager_admin_rule_collection" "rule_collection_central_sec_exceptions" {
-  name                            = "rc-exceptions"
-  description                     = "The rule collection for exceptions to remote access"
-  security_admin_configuration_id = azapi_resource.security_config_central.id
-  network_group_ids = [
-    azurerm_network_manager_network_group.network_group_central_spoke_exceptions.id
-  ]
-}
-
-# Create Security Admin Rules for production rule collection
+# Create SecurityAdmin Rule which will always allow DNS traffic regardless of NSG rules applied to the subnet
 #
 resource "azurerm_network_manager_admin_rule" "security_admin_rule_always_allow_dns_prod" {
   name                     = "AlwaysAllowDns"
@@ -779,9 +898,11 @@ resource "azurerm_network_manager_admin_rule" "security_admin_rule_always_allow_
   }
 }
 
+# Create SecurityAdmin Rule which will allow Application 1 non-production database subnets to communicate with Application Production database subnets
+#
 resource "azapi_resource" "security_admin_rule_allow_app1_from_nonprod_prod" {
   depends_on = [
-    module.avnm_centralit,
+    azurerm_network_manager.network_manager_central,
     azapi_resource.security_config_central,
     azurerm_network_manager_admin_rule_collection.rule_collection_central_sec_prod
   ]
@@ -821,52 +942,36 @@ resource "azapi_resource" "security_admin_rule_allow_app1_from_nonprod_prod" {
   }
 }
 
-resource "azapi_resource" "security_admin_rule_allow_remote_access_prod" {
-  depends_on = [
-    module.avnm_centralit,
-    azapi_resource.security_config_central,
-    azurerm_network_manager_admin_rule_collection.rule_collection_central_sec_prod
+# Create SecurityAdmin Rule which will allow remote access traffic from production hub virtual network
+#
+resource "azurerm_network_manager_admin_rule" "security_admin_rule_allow_remote_access_prod" {
+  name                     = "AllowRemoteAccess"
+  description              = "Allow remote access from production jump hosts"
+  admin_rule_collection_id = azurerm_network_manager_admin_rule_collection.rule_collection_central_sec_prod.id
+  action                   = "Allow"
+  direction                = "Inbound"
+  priority                 = 2110
+  protocol                 = "Tcp"
+  source_port_ranges       = ["0-65535"]
+  destination_port_ranges = [
+    "2222",
+    "3389"
   ]
-
-  type                      = "Microsoft.Network/networkManagers/securityAdminConfigurations/ruleCollections/rules@2024-05-01"
-  name                      = "AllowRemoteAccess"
-  parent_id                 = azurerm_network_manager_admin_rule_collection.rule_collection_central_sec_prod.id
-  schema_validation_enabled = true
-
-  body = {
-    kind = "Custom"
-    properties = {
-      description = "Allow remote access from production jump hosts",
-      protocol    = "Tcp",
-      sources = [
-        {
-          addressPrefixType = "IPPrefix",
-          addressPrefix     = local.vnet_cidr_tr_pri
-        }
-      ],
-      destinations = [
-        {
-          addressPrefixType = "IPPrefix",
-          addressPrefix     = "*"
-        }
-      ],
-      sourcePortRanges = [
-        "0-65535"
-      ],
-      destinationPortRanges = [
-        "3389",
-        "2222"
-      ],
-      access    = "Allow",
-      priority  = 2110,
-      direction = "Inbound"
-    }
+  source {
+    address_prefix_type = "IPPrefix"
+    address_prefix      = local.vnet_cidr_tr_prod
+  }
+  destination {
+    address_prefix_type = "IPPrefix"
+    address_prefix      = "*"
   }
 }
 
-resource "azapi_resource" "security_admin_rule_deny_nonprod_prod" {
+# Create SecurityAdmin Rule which will block non-production from communicating with production
+#
+resource "azapi_resource" "security_admin_rule_block_nonprod_from_prod" {
   depends_on = [
-    module.avnm_centralit,
+    azurerm_network_manager.network_manager_central,
     azapi_resource.security_config_central,
     azurerm_network_manager_admin_rule_collection.rule_collection_central_sec_prod
   ]
@@ -879,7 +984,7 @@ resource "azapi_resource" "security_admin_rule_deny_nonprod_prod" {
   body = {
     kind = "Custom"
     properties = {
-      description = "Deny non-production from communication with production",
+      description = "Block non-production from communicating with production",
       protocol    = "Any",
       sources = [
         {
@@ -897,7 +1002,7 @@ resource "azapi_resource" "security_admin_rule_deny_nonprod_prod" {
         "0-65535"
       ],
       destinationPortRanges = [
-        "0-65535"
+         "0-65535"
       ],
       access    = "Deny",
       priority  = 3000,
@@ -906,6 +1011,8 @@ resource "azapi_resource" "security_admin_rule_deny_nonprod_prod" {
   }
 }
 
+# Create SecurityAdmin Rule which will block all remote access traffic from all sources to production
+#
 resource "azurerm_network_manager_admin_rule" "security_admin_rule_deny_remote_access_all_prod" {
   name                     = "DenyRemoteAccessFromAll"
   description              = "Deny remote access from all sources"
@@ -926,7 +1033,18 @@ resource "azurerm_network_manager_admin_rule" "security_admin_rule_deny_remote_a
   }
 }
 
-# Create Security Admin Rules for non-production rule collection
+## Create SecurityAdmin Rule Collection and its rules which will apply SecurityAdmin rules to non-production spoke virtual networks
+##
+resource "azurerm_network_manager_admin_rule_collection" "rule_collection_central_sec_nonprod" {
+  name                            = "rc-nonprod"
+  description                     = "The rule collection for non-production"
+  security_admin_configuration_id = azapi_resource.security_config_central.id
+  network_group_ids = [
+    azurerm_network_manager_network_group.network_group_central_spoke_nonprod.id
+  ]
+}
+
+# Create SecurityAdmin Rule which will always allow DNS traffic regardless of NSG rules applied to the subnet
 #
 resource "azurerm_network_manager_admin_rule" "security_admin_rule_always_allow_dns_non_prod" {
   name                     = "AlwaysAllowDns"
@@ -948,49 +1066,33 @@ resource "azurerm_network_manager_admin_rule" "security_admin_rule_always_allow_
   }
 }
 
-resource "azapi_resource" "security_admin_rule_allow_remote_access_nonprod" {
-  depends_on = [
-    module.avnm_centralit,
-    azapi_resource.security_config_central,
-    azurerm_network_manager_admin_rule_collection.rule_collection_central_sec_nonprod
+# Create SecurityAdmin Rule which will allow remote access traffic from non-production hub virtual network
+#
+resource "azurerm_network_manager_admin_rule" "security_admin_rule_allow_remote_access_nonprod" {
+  name                     = "AllowRemoteAccess"
+  description              = "Allow remote access non-production jump hosts"
+  admin_rule_collection_id = azurerm_network_manager_admin_rule_collection.rule_collection_central_sec_nonprod.id
+  action                   = "AlwaysAllow"
+  direction                = "Outbound"
+  priority                 = 2200
+  protocol                 = "Tcp"
+  source_port_ranges       = ["0-65535"]
+  destination_port_ranges = [
+    "3389",
+    "2222"
   ]
-
-  type                      = "Microsoft.Network/networkManagers/securityAdminConfigurations/ruleCollections/rules@2024-05-01"
-  name                      = "AllowRemoteAccess"
-  parent_id                 = azurerm_network_manager_admin_rule_collection.rule_collection_central_sec_nonprod.id
-  schema_validation_enabled = true
-
-  body = {
-    kind = "Custom"
-    properties = {
-      description = "Allow remote access from non-production jump hosts",
-      protocol    = "Tcp",
-      sources = [
-        {
-          addressPrefixType = "IPPrefix",
-          addressPrefix     = local.vnet_cidr_tr_sec
-        }
-      ],
-      destinations = [
-        {
-          addressPrefixType = "IPPrefix",
-          addressPrefix     = "*"
-        }
-      ],
-      sourcePortRanges = [
-        "0-65535"
-      ],
-      destinationPortRanges = [
-        "3389",
-        "2222"
-      ],
-      access    = "Allow",
-      priority  = 2200,
-      direction = "Inbound"
-    }
+  source {
+    address_prefix_type = "IPPrefix"
+    address_prefix      = local.vnet_cidr_tr_nonprod
+  }
+  destination {
+    address_prefix_type = "IPPrefix"
+    address_prefix      = "*"
   }
 }
 
+# Create SecurityAdmin Rule which will block all remote access traffic from all sources to non-production
+#
 resource "azurerm_network_manager_admin_rule" "security_admin_rule_deny_remote_access_all_nonprod" {
   name                     = "DenySshFromAll"
   description              = "Deny SSH from all sources"
@@ -1011,9 +1113,20 @@ resource "azurerm_network_manager_admin_rule" "security_admin_rule_deny_remote_a
   }
 }
 
-# Create Security Admin Rules for PCI rule collection
+## Create SecurityAdmin Rule Collection and its rules which will apply SecurityAdmin rules to PCI spoke virtual networks
+##
+resource "azurerm_network_manager_admin_rule_collection" "rule_collection_central_sec_pci" {
+  name                            = "rc-pci"
+  description                     = "The rule collection for PCI workloads"
+  security_admin_configuration_id = azapi_resource.security_config_central.id
+  network_group_ids = [
+    azurerm_network_manager_network_group.network_group_central_spoke_all_pci.id
+  ]
+}
+
+# Create SecurityAdmin Rule which will block all HTTP traffic from all sources to PCI workloads
 #
-resource "azurerm_network_manager_admin_rule" "security_admin_rule_deny_http_from_all_pci" {
+resource "azurerm_network_manager_admin_rule" "security_admin_rule_deny_http_from_all_to_pci" {
   name                     = "DenyHttp"
   description              = "Deny all HTTP traffic"
   admin_rule_collection_id = azurerm_network_manager_admin_rule_collection.rule_collection_central_sec_pci.id
@@ -1033,7 +1146,18 @@ resource "azurerm_network_manager_admin_rule" "security_admin_rule_deny_http_fro
   }
 }
 
-# Create Security Admin Rules for exceptions rule collection
+## Create SecurityAdmin Rule Collection and its rules which will exempt virtual networks from all SecurityAdmin rules
+##
+resource "azurerm_network_manager_admin_rule_collection" "rule_collection_central_sec_exceptions" {
+  name                            = "rc-exceptions"
+  description                     = "The rule collection for exceptions to remote access"
+  security_admin_configuration_id = azapi_resource.security_config_central.id
+  network_group_ids = [
+    azurerm_network_manager_network_group.network_group_central_spoke_exceptions.id
+  ]
+}
+
+# Create SecurityAdmin Rule which will exempt virtual networks from all SecurityAdmin rules
 #
 resource "azurerm_network_manager_admin_rule" "security_admin_rule_allow_all" {
   name                     = "AllowRemoteAccessFromAll"
@@ -1055,410 +1179,101 @@ resource "azurerm_network_manager_admin_rule" "security_admin_rule_allow_all" {
   }
 }
 
-### Create Connectivity Configurations and supporting resources
-###
+########## Create IPAM Resources
+##########
 
-# Create Connectivity Configurations
-#
-resource "azurerm_network_manager_connectivity_configuration" "connectivity_config_central_hubspoke_prod" {
-  depends_on = [
-    azapi_resource.security_config_central
-  ]
-  name        = "cfg-conn-hubspoke-prod"
-  description = "The connectivity configuration for hub and spoke for the production environment"
-
-  network_manager_id    = module.avnm_centralit.id
-  connectivity_topology = "HubAndSpoke"
-  global_mesh_enabled   = false
-
-  applies_to_group {
-    group_connectivity = "None"
-    network_group_id   = azurerm_network_manager_network_group.network_group_central_spoke_prod.id
-    use_hub_gateway    = true
-  }
-
-  hub {
-    resource_id   = module.transit-vnet-prod.id
-    resource_type = "Microsoft.Network/virtualNetworks"
-  }
-}
-
-resource "azurerm_network_manager_connectivity_configuration" "connectivity_config_central_hubspoke_nonprod" {
-  depends_on = [
-    azapi_resource.security_config_central
-  ]
-  name        = "cfg-conn-hubspoke-nonprod"
-  description = "The connectivity configuration for hub and spoke for the non-production environment"
-
-  network_manager_id    = module.avnm_centralit.id
-  connectivity_topology = "HubAndSpoke"
-  global_mesh_enabled   = false
-
-  applies_to_group {
-    group_connectivity = "None"
-    network_group_id   = azurerm_network_manager_network_group.network_group_central_spoke_nonprod.id
-    use_hub_gateway    = true
-  }
-
-  hub {
-    resource_id   = module.transit-vnet-nonprod.id
-    resource_type = "Microsoft.Network/virtualNetworks"
-  }
-}
-
-resource "azurerm_network_manager_connectivity_configuration" "connectivity_config_central_mesh_hub_all_g" {
-  depends_on = [
-    azapi_resource.security_config_central
-  ]
-  name        = "cfg-conn-mesh-hub-all-g"
-  description = "The connectivity configuration for mesh across hubs in all environments"
-
-  network_manager_id    = module.avnm_centralit.id
-  connectivity_topology = "Mesh"
-  global_mesh_enabled   = true
-
-  applies_to_group {
-    group_connectivity = "None"
-    network_group_id   = azurerm_network_manager_network_group.network_group_central_hub_all.id
-  }
-}
-
-resource "azurerm_network_manager_connectivity_configuration" "connectivity_config_central_mesh_app1_g" {
-  depends_on = [
-    azapi_resource.security_config_central
-  ]
-  name        = "cfg-conn-mesh-app1-g"
-  description = "The connectivity configuration for mesh for application 1 workloads in all environments"
-
-  network_manager_id    = module.avnm_centralit.id
-  connectivity_topology = "Mesh"
-  global_mesh_enabled   = true
-
-  applies_to_group {
-    group_connectivity = "None"
-    network_group_id   = azurerm_network_manager_network_group.network_group_central_app1.id
-  }
-}
-
-### Create routing configuration and supporting resources
-###
-
-# Create Routing Configurations
-#
-resource "azapi_resource" "routing_config_central" {
-  depends_on = [
-    azapi_resource.security_config_central
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/routingConfigurations@2024-05-01"
-  name                      = "cfg-routing"
-  parent_id                 = module.avnm_centralit.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description = "The routing configuration for Central IT"
-    }
-  }
-}
-
-# Create Routing Rule Collections
-#
-resource "azapi_resource" "routing_rule_collection_prod_spokes" {
-  depends_on = [
-    azapi_resource.routing_config_central
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections@2024-05-01"
-  name                      = "rt-rc-spoke-prod"
-  parent_id                 = azapi_resource.routing_config_central.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description                = "The routing rule collection to apply to production spokes"
-      disableBgpRoutePropagation = "True"
-      appliesTo = [
-        {
-          networkGroupId = azurerm_network_manager_network_group.network_group_central_spoke_prod.id
-        }
-      ]
-    }
-  }
-}
-
-resource "azapi_resource" "routing_rule_collection_nonprod_spokes" {
-  depends_on = [
-    azapi_resource.routing_config_central
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections@2024-05-01"
-  name                      = "rt-rc-spoke-nonprod"
-  parent_id                 = azapi_resource.routing_config_central.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description                = "The routing rule collection to apply to non-production spokes"
-      disableBgpRoutePropagation = "True"
-      appliesTo = [
-        {
-          networkGroupId = azurerm_network_manager_network_group.network_group_central_spoke_nonprod.id
-        }
-      ]
-    }
-  }
-}
-
-resource "azapi_resource" "routing_rule_collection_prod_gateway_subnet" {
-  depends_on = [
-    azapi_resource.routing_config_central
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections@2024-05-01"
-  name                      = "rt-rc-gateway-subnet-prod"
-  parent_id                 = azapi_resource.routing_config_central.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description                = "The routing rule collection to apply to the GatewaySubnet in production"
-      disableBgpRoutePropagation = "False"
-      appliesTo = [
-        {
-          networkGroupId = azapi_resource.network_group_central_gatewaysubnet_prod.id
-        }
-      ]
-    }
-  }
-}
-
-resource "azapi_resource" "routing_rule_collection_nonprod_gateway_subnet" {
-  depends_on = [
-    azapi_resource.routing_config_central
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections@2024-05-01"
-  name                      = "rt-rc-gateway-subnet-nonprod"
-  parent_id                 = azapi_resource.routing_config_central.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description                = "The routing rule collection to apply to the GatewaySubnet in non-production"
-      disableBgpRoutePropagation = "False"
-      appliesTo = [
-        {
-          networkGroupId = azapi_resource.network_group_central_gatewaysubnet_nonprod.id
-        }
-      ]
-    }
-  }
-}
-
-resource "azapi_resource" "routing_rule_collection_cross_environment" {
-  depends_on = [
-    azapi_resource.routing_config_central
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections@2024-05-01"
-  name                      = "rt-rc-cross-environment"
-  parent_id                 = azapi_resource.routing_config_central.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description                = "The routing rule collection to apply to firewall internal subnets to allow for cross environment (region) communication"
-      disableBgpRoutePropagation = "False"
-      appliesTo = [
-        {
-          networkGroupId = azapi_resource.network_group_central_fwintsubnet.id
-        }
-      ]
-    }
-  }
-}
-
-# Create Routing Rules
-#
-resource "azapi_resource" "routing_rule_default_route_prod" {
-  depends_on = [
-    azapi_resource.routing_rule_collection_prod_spokes
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
-  name                      = "defaultRoute"
-  parent_id                 = azapi_resource.routing_rule_collection_prod_spokes.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description = "The rule to point the default route to the production NVA load balancer"
-      destination = {
-        type               = "AddressPrefix"
-        destinationAddress = "0.0.0.0/0"
-      }
-      nextHop = {
-        nextHopType    = "VirtualAppliance"
-        nextHopAddress = module.transit-vnet-prod.firewall_ilb_ip
-      }
-    }
-  }
-}
-
-resource "azapi_resource" "routing_rule_default_route_nonprod" {
-  depends_on = [
-    azapi_resource.routing_rule_collection_prod_spokes
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
-  name                      = "defaultRoute"
-  parent_id                 = azapi_resource.routing_rule_collection_nonprod_spokes.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description = "The rule to point the default route to the non-production NVA load balancer"
-      destination = {
-        type               = "AddressPrefix"
-        destinationAddress = "0.0.0.0/0"
-      }
-      nextHop = {
-        nextHopType    = "VirtualAppliance"
-        nextHopAddress = module.transit-vnet-nonprod.firewall_ilb_ip
-      }
-    }
-  }
-}
-
-resource "azapi_resource" "routing_rule_gateway_subnet_route_prod_spoke1" {
-  depends_on = [
-    azapi_resource.routing_rule_collection_prod_gateway_subnet
-  ]
-  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
-  name                      = "prodvnet1"
-  parent_id                 = azapi_resource.routing_rule_collection_prod_gateway_subnet.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description = "The rule to route traffic from on-premises to production spoke 1 to the NVA"
-      destination = {
-        type               = "AddressPrefix"
-        destinationAddress = local.vnet_cidr_wl1_pri
-      }
-      nextHop = {
-        nextHopType    = "VirtualAppliance"
-        nextHopAddress = module.transit-vnet-nonprod.firewall_ilb_ip
-      }
-    }
-  }
-}
-
-resource "azapi_resource" "routing_rule_gateway_subnet_route_prod_spoke2" {
-  depends_on = [
-    azapi_resource.routing_rule_collection_prod_gateway_subnet
-  ]
-  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
-  name                      = "prodvnet2"
-  parent_id                 = azapi_resource.routing_rule_collection_prod_gateway_subnet.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description = "The rule to route traffic from on-premises to production spoke 2 to the NVA"
-      destination = {
-        type               = "AddressPrefix"
-        destinationAddress = local.vnet_cidr_wl2_pri
-      }
-      nextHop = {
-        nextHopType    = "VirtualAppliance"
-        nextHopAddress = module.transit-vnet-nonprod.firewall_ilb_ip
-      }
-    }
-  }
-}
-
-resource "azapi_resource" "routing_rule_gateway_subnet_route_nonprod_spoke1" {
-  depends_on = [
-    azapi_resource.routing_rule_collection_prod_gateway_subnet
-  ]
-  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
-  name                      = "nonprodvnet1"
-  parent_id                 = azapi_resource.routing_rule_collection_nonprod_gateway_subnet.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description = "The rule to route traffic from on-premises to non-production spoke 1 to the NVA"
-      destination = {
-        type               = "AddressPrefix"
-        destinationAddress = local.vnet_cidr_wl1_sec
-      }
-      nextHop = {
-        nextHopType    = "VirtualAppliance"
-        nextHopAddress = module.transit-vnet-nonprod.firewall_ilb_ip
-      }
-    }
-  }
-}
-
-resource "azapi_resource" "routing_rule_cross_environment_prod" {
-  depends_on = [
-    azapi_resource.routing_rule_collection_prod_gateway_subnet
-  ]
-  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
-  name                      = "azureprod"
-  parent_id                 = azapi_resource.routing_rule_collection_cross_environment.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description = "The rule to route traffic to production to the NVA"
-      destination = {
-        type               = "AddressPrefix"
-        destinationAddress = var.address_space_azure_prod
-      }
-      nextHop = {
-        nextHopType    = "VirtualAppliance"
-        nextHopAddress = module.transit-vnet-prod.firewall_ilb_ip
-      }
-    }
-  }
-}
-
-resource "azapi_resource" "routing_rule_cross_environment_nonprod" {
-  depends_on = [
-    azapi_resource.routing_rule_collection_prod_gateway_subnet
-  ]
-  type                      = "Microsoft.Network/networkManagers/routingConfigurations/ruleCollections/rules@2024-05-01"
-  name                      = "azurenonprod"
-  parent_id                 = azapi_resource.routing_rule_collection_cross_environment.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description = "The rule to route traffic to non-production to the NVA"
-      destination = {
-        type               = "AddressPrefix"
-        destinationAddress = var.address_space_azure_nonprod
-      }
-      nextHop = {
-        nextHopType    = "VirtualAppliance"
-        nextHopAddress = module.transit-vnet-nonprod.firewall_ilb_ip
-      }
-    }
-  }
-}
-
-##### Create Azure Policies for Central IT Azure Virtual Network Manager Instance
+##### Create IPAM Pools
 #####
 
-### Create Azure Policy Definitions
-###
+## Create IPAM pool for on-premises
+##
+resource "azurerm_network_manager_ipam_pool" "ipam_org_on_prem_pool" {
+  name               = "pool-org-onprem"
+  location           = var.region_prod
+  network_manager_id = azurerm_network_manager.network_manager_central.id
+  display_name       = "pool-org-onprem"
+  description        = "The primary pool for the organization used on-premises"
+  address_prefixes   = [var.address_space_onpremises]
+  tags               = var.tags
+}
 
-# Create Azure Policy Definition that adds virtual networks to the all spoke production network group if they are tagged with func=spoke and env=prod
+# Create Static CIDR to represent on-premises and assign to on-premises IPAM pool
 #
+resource "azurerm_network_manager_ipam_pool_static_cidr" "ipam_org_pool_allocation_on_premises_lab" {
+  name         = "example-ipsc"
+  ipam_pool_id = azurerm_network_manager_ipam_pool.ipam_org_on_prem_pool.id
+  address_prefixes = [
+    cidrsubnet(var.address_space_onpremises, 8, 0)
+  ]
+}
+
+## Create IPAM pool for all of Azure
+##
+resource "azurerm_network_manager_ipam_pool" "ipam_org_azure_pool" {
+  name               = "pool-org-azure"
+  location           = var.region_prod
+  network_manager_id = azurerm_network_manager.network_manager_central.id
+  display_name       = "pool-org-azure"
+  description        = "The pool dedicated to all of Azure"
+  address_prefixes = [
+    var.address_space_cloud
+  ]
+  tags = var.tags
+}
+
+## Create IPAM pool for production
+##
+resource "azurerm_network_manager_ipam_pool" "ipam_org_prod_pool" {
+  name               = "pool-org-prod"
+  location           = var.region_prod
+  network_manager_id = azurerm_network_manager.network_manager_central.id
+  parent_pool_name   = azurerm_network_manager_ipam_pool.ipam_org_azure_pool.name
+  display_name       = "pool-org-prod"
+  description        = "The pool dedicated to production environment"
+  address_prefixes = [
+    var.address_space_azure_prod
+  ]
+  tags = var.tags
+}
+
+## Create IPAM pool for non-production
+##
+resource "azurerm_network_manager_ipam_pool" "ipam_org_nonprod_pool" {
+  name               = "pool-org-nonprod"
+  location           = var.region_nonprod
+  network_manager_id = azurerm_network_manager.network_manager_central.id
+  parent_pool_name   = azurerm_network_manager_ipam_pool.ipam_org_azure_pool.name
+  display_name       = "pool-org-nonprod"
+  description        = "The pool dedicated to non-production environment"
+  address_prefixes = [
+    var.address_space_azure_nonprod
+  ]
+  tags = var.tags
+}
+
+## Create IPAM pool for the business unit
+##
+resource "azurerm_network_manager_ipam_pool" "ipam_org_bu_pool" {
+  name               = "pool-org-bu"
+  location           = var.region_prod
+  network_manager_id = azurerm_network_manager.network_manager_central.id
+  parent_pool_name   = azurerm_network_manager_ipam_pool.ipam_org_prod_pool.name
+  display_name       = "pool-org-bu"
+  description        = "The pool dedicated to the business unit"
+  address_prefixes = [
+    cidrsubnet(var.address_space_azure_prod, 2, 3)
+  ]
+  tags = var.tags
+}
+
+#################### Create Azure Policies which will be used with AVNM Network Group dynamic membership
+####################
+
+########## Create Azure Policy definitions
+##########
+
+##### Create Azure Policy Definition that adds virtual networks to the all spoke production network group if they are tagged with func=spoke and env=prod
+#####
 resource "azurerm_policy_definition" "policy_add_spokes_prod_to_prod_network_group" {
   name                = "custom-avnm-production-spoke"
   policy_type         = "Custom"
@@ -1500,8 +1315,8 @@ resource "azurerm_policy_definition" "policy_add_spokes_prod_to_prod_network_gro
   })
 }
 
-# Create Azure Policy Definition that adds virtual networks to the all spoke non-production network group if they are tagged with func=spoke and env=nonprod
-#
+##### Create Azure Policy Definition that adds virtual networks to the all spoke non-production network group if they are tagged with func=spoke and env=nonprod
+#####
 resource "azurerm_policy_definition" "policy_add_spokes_prod_to_nonprod_network_group" {
   name                = "custom-avnm-nonproduction-spoke"
   policy_type         = "Custom"
@@ -1543,8 +1358,8 @@ resource "azurerm_policy_definition" "policy_add_spokes_prod_to_nonprod_network_
   })
 }
 
-# Create Azure Policy Definition that adds virtual networks to the PCI network groups if they are tagged with data=pci
-#
+##### Create Azure Policy Definition that adds virtual networks to the PCI network groups if they are tagged with data=pci
+#####
 resource "azurerm_policy_definition" "policy_add_spokes_pci_to_pci_network_group" {
   name                = "custom-avnm-pci-spoke"
   policy_type         = "Custom"
@@ -1582,8 +1397,8 @@ resource "azurerm_policy_definition" "policy_add_spokes_pci_to_pci_network_group
   })
 }
 
-# Create Azure Policy Definition that adds virtual networks to the all hub network group if they are tagged with func=hub
-#
+##### Create Azure Policy Definition that adds virtual networks to the all hub network group if they are tagged with func=hub
+#####
 resource "azurerm_policy_definition" "policy_add_hub_to_hub_network_group" {
   name                = "custom-avnm-all-hub"
   policy_type         = "Custom"
@@ -1615,14 +1430,14 @@ resource "azurerm_policy_definition" "policy_add_hub_to_hub_network_group" {
     "then" : {
       "effect" : "addToNetworkGroup",
       "details" : {
-        "networkGroupId" : azurerm_network_manager_network_group.network_group_central_hub_all.id
+        "networkGroupId" : azurerm_network_manager_network_group.network_group_central_transit_all.id
       }
     }
   })
 }
 
-# Create Azure Policy Definition that adds virtual networks to the sql workload network group if they are tagged with wl=app1
-#
+##### Create Azure Policy Definition that adds virtual networks to the sql workload network group if they are tagged with wl=app1
+#####
 resource "azurerm_policy_definition" "policy_add_hub_to_app1_network_group" {
   name                = "custom-avnm-all-app1"
   policy_type         = "Custom"
@@ -1660,11 +1475,11 @@ resource "azurerm_policy_definition" "policy_add_hub_to_app1_network_group" {
   })
 }
 
-### Create Azure Policy Assignments
-###
+########## Create Azure Policy assignments
+##########
 
-# Create Azure Policy assignments and apply directly to the resource group
-#
+##### Assign policies to the resource group created in this demo
+#####
 resource "azurerm_resource_group_policy_assignment" "policy_assignment_add_spokes_prod_to_prod_network_group" {
   name                 = "custom-avnm-production-spoke"
   policy_definition_id = azurerm_policy_definition.policy_add_spokes_prod_to_prod_network_group.id
@@ -1695,300 +1510,102 @@ resource "azurerm_resource_group_policy_assignment" "policy_assignment_hub_to_ap
   resource_group_id    = azurerm_resource_group.rg_demo_avnm.id
 }
 
-##### Create IPAM resources
-#####
+#################### Create BU AVNM resources
+####################
 
-# Create IPAM pools
-#
-resource "azapi_resource" "ipam_org_on_prem_pool" {
-  depends_on = [
-    module.avnm_centralit
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/ipamPools@2024-05-01"
-  name                      = local.org_onprem_pool_name
-  parent_id                 = module.avnm_centralit.id
-  schema_validation_enabled = true
-
-  body = {
-    location = var.location_prod
-    tags     = local.tags
-    properties = {
-      description    = "The primary pool for the organization used on-premises",
-      parentPoolName = ""
-      addressPrefixes = [
-        var.address_space_onpremises
-      ]
-    }
-  }
-}
-
-resource "azapi_resource" "ipam_org_pool" {
-  depends_on = [
-    module.avnm_centralit
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/ipamPools@2024-05-01"
-  name                      = local.org_pool_name
-  parent_id                 = module.avnm_centralit.id
-  schema_validation_enabled = true
-
-  body = {
-    location = var.location_prod
-    tags     = local.tags
-    properties = {
-      description    = "The primary pool for the organization used in the cloud",
-      parentPoolName = ""
-      addressPrefixes = [
-        var.address_space_cloud
-      ]
-    }
-  }
-}
-
-resource "azapi_resource" "ipam_org_pool_prod" {
-  depends_on = [
-    azapi_resource.ipam_org_pool
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/ipamPools@2024-05-01"
-  name                      = local.prod_pool_name
-  parent_id                 = module.avnm_centralit.id
-  schema_validation_enabled = true
-
-  body = {
-    location = var.location_prod
-    tags     = local.tags
-    properties = {
-      description    = "The pool for production for the organization used in the cloud",
-      parentPoolName = local.org_pool_name
-      addressPrefixes = [
-        var.address_space_azure_prod
-      ]
-    }
-  }
-}
-
-resource "azapi_resource" "ipam_org_pool_nonprod" {
-  depends_on = [
-    azapi_resource.ipam_org_pool
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/ipamPools@2024-05-01"
-  name                      = local.nonprod_pool_name
-  parent_id                 = module.avnm_centralit.id
-  schema_validation_enabled = true
-
-  body = {
-    location = var.location_nonprod
-    tags     = local.tags
-    properties = {
-      description    = "The pool for non-production for the organization used in the cloud",
-      parentPoolName = local.org_pool_name
-      addressPrefixes = [
-        var.address_space_azure_nonprod
-      ]
-    }
-  }
-}
-
-resource "azapi_resource" "ipam_org_pool_prod_bu" {
-  depends_on = [
-    azapi_resource.ipam_org_pool_prod
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/ipamPools@2024-05-01"
-  name                      = local.bu_prod_pool_name
-  parent_id                 = module.avnm_centralit.id
-  schema_validation_enabled = true
-
-  body = {
-    location = var.location_prod
-    tags     = local.tags
-    properties = {
-      description    = "The pool for production for the business unit used in the cloud",
-      parentPoolName = local.prod_pool_name
-      addressPrefixes = [
-        # Give BU a subset of total Azure production address space
-        cidrsubnet(var.address_space_azure_prod, 2, 3)
-      ]
-    }
-  }
-}
-
-# Create IPAM Allocations
-#
-resource "azapi_resource" "ipam_org_pool_allocation_on_premises_lab" {
-  depends_on = [
-    azapi_resource.ipam_org_on_prem_pool
-  ]
-
-  type                      = "Microsoft.Network/networkManagers/ipamPools/staticCidrs@2024-05-01"
-  name                      = local.org_allocation_onprem_lab_name
-  parent_id                 = azapi_resource.ipam_org_on_prem_pool.id
-  schema_validation_enabled = true
-
-  body = {
-    properties = {
-      description = "This is the allocation for the on-premises lab"
-      addressPrefixes = [
-        cidrsubnet(var.address_space_onpremises, 8, 0)
-      ]
-    }
-  }
-}
-
-# Create a Virtual Network to demonstrate adding it to the IPAM pool by specifying number of addresses
-#
-resource "azapi_resource" "vnet_bu_wl1_ipam" {
-  depends_on = [
-    azapi_resource.ipam_org_pool_prod_bu
-  ]
-
-  type                      = "Microsoft.Network/virtualNetworks@2024-05-01"
-  name                      = "vnetbuwl1${local.location_code_prod}${random_string.unique.result}"
-  parent_id                 = azurerm_resource_group.rg_demo_avnm.id
-  schema_validation_enabled = true
-
-  body = {
-    location = var.location_prod
-    properties = {
-      addressSpace = {
-        ipamPoolPrefixAllocations = [
-          {
-            numberOfIpAddresses = "512"
-            pool = {
-              id = azapi_resource.ipam_org_pool_prod_bu.id
-            }
-          }
-        ]
-      }
-      subnets = [
-        {
-          name = "snet-pri"
-          properties = {
-            ipamPoolPrefixAllocations = [
-              {
-                numberOfIpAddresses = "256"
-                pool = {
-                  id = azapi_resource.ipam_org_pool_prod_bu.id
-                }
-              }
-            ]
-          }
-        },
-        {
-          name = "snet-sec"
-          properties = {
-            ipamPoolPrefixAllocations = [
-              {
-                numberOfIpAddresses = "256"
-                pool = {
-                  id = azapi_resource.ipam_org_pool_prod_bu.id
-                }
-              }
-            ]
-          }
-        }
-      ]
-    },
-    tags = local.tags
-  }
-}
-
-# Create an Azure RBAC Role assignment granting the user the ability to use the BU IPAM pool
-#
-resource "azurerm_role_assignment" "ipam_pool_user_bu_pool" {
-  depends_on = [
-    azapi_resource.ipam_org_pool_prod_bu
-  ]
-  name                 = uuidv5("dns", "${azurerm_resource_group.rg_demo_avnm.name}${var.user_object_id}${azapi_resource.ipam_org_pool_prod_bu.name}pooluser")
-  scope                = azapi_resource.ipam_org_pool_prod_bu.id
-  role_definition_name = "IPAM Pool User"
-  principal_id         = var.user_object_id
-}
-
-##### Create a child Azure Virtual Network Manager instance and supporting resources
-#####
-
-# Create a child Azure Virtual Network Manager instance
-#
-module "avnm_bu" {
-  depends_on = [
-    azurerm_resource_group.rg_demo_avnm,
-    module.workload1-vnet-prod,
-    module.workload1-vnet-nonprod,
-    module.workload1-vnet-pci,
-    module.transit-vnet-prod,
-    module.transit-vnet-nonprod,
-    module.workload1-vm-db-prod,
-    module.workload1-vm-db-nonprod
-  ]
-  source = "./manager"
-
+## Create Azure Virtual Network Manager and configure diagnostic settings
+##
+resource "azurerm_network_manager" "network_manager_bu" {
   name                = "avnmbu${random_string.unique.result}"
-  location            = var.location_prod
+  description         = "The BU Azure Virtual Network Manager instance"
+  location            = var.region_prod
   resource_group_name = azurerm_resource_group.rg_demo_avnm.name
-  law_resource_id     = module.law.id
 
-  description = "The BU Azure Virtual Network Manager instance"
-
-  management_scope = {
+  # Set scope of management to management group allowing it to manage all subscriptions beneath
+  scope {
     subscription_ids = [
       data.azurerm_subscription.current.id
     ]
   }
-  configurations_supported = [
-    "SecurityAdmin",
+
+  # Set scope of access to enable it to manage connectivity, securityadmin, and routing configurations
+  scope_accesses = [
     "Connectivity",
+    "SecurityAdmin",
     "Routing"
   ]
-
-  tags = local.tags
+  tags = var.tags
 }
 
-# Create Network Groups used in the child Azure Virtual Network Manager instance
-#
+resource "azurerm_monitor_diagnostic_setting" "diag_avnm_bu" {
+  name                       = "diag-base"
+  target_resource_id         = azurerm_network_manager.network_manager_bu.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.law.id
+
+  enabled_log {
+    category = "NetworkGroupMembershipChange"
+  }
+
+  enabled_log {
+    category = "RuleCollectionChange"
+  }
+
+  enabled_log {
+    category = "ConnectivityConfigurationChange"
+  }
+}
+
+########## Create Network Groups
+##########
+
+##### Create Network Groups used by SecurityAdmin Configurations and add static members
+#####
+
+## Create Network Group which will contain all BU production spoke virtual networks
+##
 resource "azurerm_network_manager_network_group" "network_group_bu_spoke_prod" {
   name               = "ng-spoke-prod-bu"
   description        = "The network group for BU spokes in production"
-  network_manager_id = module.avnm_bu.id
+  network_manager_id = azurerm_network_manager.network_manager_bu.id
 }
 
-# Add the production BU spoke virtual network to the network group
-#
+## Add the production virtual network to the network group as a static member
+##
 resource "azurerm_network_manager_static_member" "static_member_bu_spoke_prod" {
-  name                      = "member${module.workload1-vnet-prod.name}"
+  name                      = "mem-vnet-prod-workload"
   network_group_id          = azurerm_network_manager_network_group.network_group_bu_spoke_prod.id
-  target_virtual_network_id = module.workload1-vnet-prod.id
+  target_virtual_network_id = module.workload_vnets["prod"].workload_vnet_id
 }
 
-# Create BU Security Admin Configuration
-#
-resource "azapi_resource" "security_config_bu" {
-  depends_on = [
-    module.avnm_bu,
-    azurerm_network_manager_network_group.network_group_bu_spoke_prod,
+##### Create SecurityAdmin Configuration
+#####
 
-  ]
+## Create business unit SecurityAdmin Configuration
+## AzApi is used because AzureRm does not support networkGroupAddressSpaceAggregationOption as of 4.44
+resource "azapi_resource" "security_config_bu" {
   type                      = "Microsoft.Network/networkManagers/securityAdminConfigurations@2024-05-01"
-  name                      = "cfg-sec"
-  parent_id                 = module.avnm_bu.id
+  name                      = "cfg-security_admin"
+  parent_id                 = azurerm_network_manager.network_manager_bu.id
   schema_validation_enabled = true
 
   body = {
     properties = {
-      description = "The security configuration for a business unit"
+      description = "The SecurityAdmin configuration for BU"
       applyOnNetworkIntentPolicyBasedServices = [
         "AllowRulesOnly"
       ]
+      # This option allows Network Groups in Security Admin Rules
       networkGroupAddressSpaceAggregationOption = "Manual"
     }
   }
 }
 
-# Create Azure Virtual Network Manager BU Security Admin Rule Collections
-#
+##### Create SecurityAdmin Rule Collections and SecurityAdmin Rules
+#####
+
+
+## Create Azure Virtual Network Manager BU Security Admin Rule Collections
+##
 resource "azurerm_network_manager_admin_rule_collection" "rule_collection_bu_sec_prod" {
   name                            = "rc-prod"
   description                     = "The rule collection for production BU spokes"
@@ -1998,11 +1615,11 @@ resource "azurerm_network_manager_admin_rule_collection" "rule_collection_bu_sec
   ]
 }
 
-# Create Security Admin Rule for BU production rule collection
-#
+## Create Security Admin Rule for BU production rule collection
+##
 resource "azapi_resource" "security_admin_rule_allow_remote_access_prod_bu" {
   depends_on = [
-    module.avnm_bu,
+    azurerm_network_manager.network_manager_bu,
     azapi_resource.security_config_bu,
     azurerm_network_manager_admin_rule_collection.rule_collection_bu_sec_prod
   ]
@@ -2015,7 +1632,7 @@ resource "azapi_resource" "security_admin_rule_allow_remote_access_prod_bu" {
   body = {
     kind = "Custom"
     properties = {
-      description = "Allow access from all source to the BU servers",
+      description = "Allow remote access from all source to the BU servers",
       protocol    = "Tcp",
       sources = [
         {
@@ -2042,5 +1659,34 @@ resource "azapi_resource" "security_admin_rule_allow_remote_access_prod_bu" {
       direction = "Inbound"
     }
   }
+}
+
+############### Perform remaining actions to exercises AVNM features
+###############
+
+## Create an Azure RBAC Role assignment granting the user the ability to use the BU IPAM pool
+##
+resource "azurerm_role_assignment" "ipam_pool_user_bu_pool" {
+  depends_on = [
+    azurerm_network_manager_ipam_pool.ipam_org_bu_pool
+  ]
+  name                 = uuidv5("dns", "${azurerm_resource_group.rg_demo_avnm.name}${var.user_object_id}${azurerm_network_manager_ipam_pool.ipam_org_bu_pool.name}pooluser")
+  scope                = azurerm_network_manager_ipam_pool.ipam_org_bu_pool.id
+  role_definition_name = "IPAM Pool User"
+  principal_id         = var.user_object_id
+}
+
+## Create BU virtual network to demonstrate consumption of IPAM pool
+##
+resource "azurerm_virtual_network" "vnet_bu" {
+  name                = "vnetbu${local.location_code_prod}${random_string.unique.result}"
+  location            = var.region_prod
+  resource_group_name = azurerm_resource_group.rg_demo_avnm.name
+  ip_address_pool {
+    id                     = azurerm_network_manager_ipam_pool.ipam_org_bu_pool.id
+    number_of_ip_addresses = 256
+  }
+  dns_servers = ["168.63.129.16"]
+  tags        = var.tags
 }
 

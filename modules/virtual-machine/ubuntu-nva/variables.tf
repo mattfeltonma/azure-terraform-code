@@ -119,13 +119,13 @@ variable "location_code" {
   type = string
 }
 
-variable "nic_public_private_ip_address" {
-  description = "The private IP address assigned to the NIC in the public subnet"
+variable "nic_untrusted_ip_address" {
+  description = "The private IP address assigned to the NIC in the untrusted subnet"
   type        = string
 }
 
-variable "nic_private_private_ip_address" {
-  description = "The private IP address assigned to the NIC in the private subnet"
+variable "nic_trusted_ip_address" {
+  description = "The private IP address assigned to the NIC in the trusted subnet"
   type        = string
 }
 

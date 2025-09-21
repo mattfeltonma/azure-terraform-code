@@ -1,4 +1,36 @@
 locals {
+  # Environments
+  hub_environments = ["prod", "nonprod"]
+  workload_environments = [
+    {
+      env = "prod"
+      region = var.region_prod
+      region_code = local.location_code_prod
+      address_space = local.vnet_cidr_wl1_prod
+      db_vm = true
+    },
+    {
+      env = "pci"
+      region = var.region_prod
+      region_code = local.location_code_prod
+      address_space = local.vnet_cidr_wl1_pci
+      db_vm = false
+    },
+    {
+      env = "nonprod"
+      region = var.region_nonprod
+      region_code = local.location_code_nonprod
+      address_space = local.vnet_cidr_wl1_nonprod
+      db_vm = true
+    }
+  ]
+
+  # Router ASNs for each environment
+  router_asn = {
+    "prod"    = 65001,
+    "nonprod" = 65002
+  }
+
   # Convert the region name to a unique abbreviation
   region_abbreviations = {
     "australiacentral"   = "acl",
@@ -56,45 +88,21 @@ locals {
     "westus2"            = "wus2",
     "westus3"            = "wus3"
   }
-  location_code_prod = lookup(local.region_abbreviations, var.location_prod, var.location_prod)
-  location_code_nonprod = lookup(local.region_abbreviations, var.location_nonprod, var.location_nonprod)
-
-  # Naming conventions
-  route_prefix = "udr"
-  
-  # Fixed variables
-  law_purpose = "cnt"
-  asn_router_r1 = 65001
-  asn_router_r2 = 65002
+  location_code_prod = lookup(local.region_abbreviations, var.region_prod, var.region_prod)
+  location_code_nonprod = lookup(local.region_abbreviations, var.region_nonprod, var.region_nonprod)
 
   # Create the virtual network cidr ranges
-  vnet_cidr_tr_pri = cidrsubnet(var.address_space_azure_prod, 2, 0)
-  vnet_cidr_wl1_pri = cidrsubnet(var.address_space_azure_prod, 2, 1)
-  vnet_cidr_wl2_pri = cidrsubnet(var.address_space_azure_prod, 2, 2)
-  primary_region_vnet_cidrs = {
-    "wl1" = local.vnet_cidr_wl1_pri,
-    "wl2" = local.vnet_cidr_wl2_pri
-  }
-
-  vnet_cidr_tr_sec = cidrsubnet(var.address_space_azure_nonprod, 2, 0)
-  vnet_cidr_wl1_sec = cidrsubnet(var.address_space_azure_nonprod, 2, 1)
-  vnet_cidr_wl2_sec = cidrsubnet(var.address_space_azure_nonprod, 2, 2)
-  secondary_region_vnet_cidrs =  {
-    "wl1" = local.vnet_cidr_wl1_sec,
-    "wl2" = local.vnet_cidr_wl2_sec
-  }
+  vnet_cidr_tr_prod = cidrsubnet(var.address_space_azure_prod, 2, 0)
+  vnet_cidr_wl1_prod = cidrsubnet(var.address_space_azure_prod, 2, 1)
+  vnet_cidr_wl1_pci = cidrsubnet(var.address_space_azure_prod, 2, 2)
+  vnet_cidr_tr_nonprod = cidrsubnet(var.address_space_azure_nonprod, 2, 0)
+  vnet_cidr_wl1_nonprod = cidrsubnet(var.address_space_azure_nonprod, 2, 1)
 
   # Add required tags and merge them with the provided tags
   required_tags = {
     created_date = timestamp()
     created_by   = data.azurerm_client_config.identity_config.object_id
   }
-
-  # Configure the server OS and image
-  image_preference_publisher = "canonical"
-  image_preference_offer = "ubuntu-24_04-lts"
-  image_preference_sku = "server"
-  image_preference_version = "latest"
 
   # Names for IPAM pools
   org_onprem_pool_name = "pool-org-onprem"
