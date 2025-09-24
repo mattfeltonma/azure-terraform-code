@@ -63,7 +63,7 @@ resource "azurerm_subnet" "subnet_app" {
 ##
 resource "azurerm_subnet" "subnet_bastion" {
   name                 = "AzureBastionSubnet"
-  resource_group_name  = azurerm_resource_group.rg_work.name
+  resource_group_name  = var.resource_group_name_workload
   virtual_network_name = azurerm_virtual_network.vnet.name
   # Reserve a /27 for the subnet  
   address_prefixes = [cidrsubnet(var.address_space_vnet[0], 2, 0)]
@@ -75,7 +75,7 @@ resource "azurerm_subnet" "subnet_bastion" {
 ##
 resource "azurerm_subnet" "subnet_svc" {
   name                 = "snet-svc"
-  resource_group_name  = azurerm_resource_group.rg_work.name
+  resource_group_name  = var.resource_group_name_workload
   virtual_network_name = azurerm_virtual_network.vnet.name
   # Reserve a /27 for the subnet
   address_prefixes = [cidrsubnet(var.address_space_vnet[0], 2, 2)]
@@ -86,6 +86,10 @@ resource "azurerm_subnet" "subnet_svc" {
 ## Create Private DNS Zones and link them to the virtual network for each resource that will be used in the lab
 ##
 resource "azurerm_private_dns_zone" "private_dns_zone" {
+  depends_on = [ 
+    azurerm_virtual_network.vnet 
+  ]
+
   for_each = { for idx, zone in local.private_dns_zones : zone => zone }
 
   name                = each.value
@@ -94,6 +98,11 @@ resource "azurerm_private_dns_zone" "private_dns_zone" {
 }
 
 resource "azurerm_private_dns_zone_virtual_network_link" "link" {
+  depends_on = [ 
+    azurerm_virtual_network.vnet,
+    azurerm_private_dns_zone.private_dns_zone
+  ]
+
   for_each = { for idx, zone in local.private_dns_zones : zone => zone }
 
   name                  = "${each.value}-link"
@@ -162,8 +171,7 @@ resource "azurerm_public_ip" "pip_bastion" {
 ##
 resource "azurerm_bastion_host" "bastion" {
   depends_on = [
-    azurerm_public_ip.pip_bastion,
-    azurerm_virtual_network_gateway.vgw_vpn
+    azurerm_public_ip.pip_bastion
   ]
 
   name                = "bstnsp${var.region_code}${var.random_string}"
@@ -192,6 +200,16 @@ resource "azurerm_user_assigned_identity" "umi" {
   tags = var.tags
 }
 
+## Create a public IP address to be used by the Azure virtual machine to allow access to the Internet
+##
+resource "azurerm_public_ip" "pip_vm" {
+  name                = "pipvmnsp${var.region_code}${var.random_string}"
+  location            = var.region
+  resource_group_name = var.resource_group_name_workload
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
 ## Create the virtual network interface for the virtual machine
 ##
 resource "azurerm_network_interface" "nic" {
@@ -205,9 +223,10 @@ resource "azurerm_network_interface" "nic" {
   # Configure the IP settings for the network interface
   ip_configuration {
     name                          = "primary"
-    subnet_id                     = azurerrm_subnet.subnet_app.id
+    subnet_id                     = azurerm_subnet.subnet_app.id
     private_ip_address_allocation = "Static"
     private_ip_address            = cidrhost(azurerm_subnet.subnet_app.address_prefixes[0], 20)
+    public_ip_address_id          = azurerm_public_ip.pip_vm.id
   }
   tags = var.tags
 }
@@ -247,7 +266,7 @@ resource "azurerm_windows_virtual_machine" "vm" {
   os_disk {
     name                 = "osdiskvmwebnsp${var.region_code}${var.random_string}"
     storage_account_type = "StandardSSD_LRS"
-    disk_size_gb         = 60
+    disk_size_gb         = 128
     caching              = "ReadWrite"
   }
 
@@ -260,8 +279,7 @@ resource "azurerm_windows_virtual_machine" "vm" {
 ##
 resource "azurerm_virtual_machine_extension" "custom-script-extension" {
   depends_on = [
-    azurerm_windows_virtual_machine.vm,
-    azurerm_virtual_machine_data_disk_attachment.data-attach
+    azurerm_windows_virtual_machine.vm
   ]
 
   virtual_machine_id = azurerm_windows_virtual_machine.vm.id

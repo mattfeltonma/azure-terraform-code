@@ -15,11 +15,6 @@ variable "vm_admin_password" {
   sensitive   = true
 }
 
-variable "key_vault_admin_object_id" {
-  description = "The object id of the user or service principal to assign the Key Vault Administrator role to"
-  type        = string
-}
-
 variable "region" {
   description = "The Azure region to deploy resources to"
   type        = string
@@ -38,7 +33,7 @@ variable "network_watcher_resource_group_name" {
 }
 
 variable "object_id_user" {
-  description = "The object ID of the user or service principal"
+  description = "The object ID that will be assigned permissions at the data plane of the resources created in this demo"
   type        = string
 }
 

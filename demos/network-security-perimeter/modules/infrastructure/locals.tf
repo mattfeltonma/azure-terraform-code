@@ -3,7 +3,7 @@ locals {
   private_dns_zones = {
     keyvault  = "privatelink.vaultcore.azure.net"
     storage   = "privatelink.blob.core.windows.net"
-    search    = "privatelink.search.azure.com"
+    search    = "privatelink.search.windows.net"
     openai    = "privatelink.openai.azure.com"
     ai        = "privatelink.services.ai.azure.com"
     cognitive = "privatelink.cognitiveservices.azure.com"

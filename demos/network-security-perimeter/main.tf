@@ -126,7 +126,7 @@ module "infrastructure" {
   vm_admin_password                   = var.vm_admin_password
   vm_sku_size                         = var.sku_vm_size
   storage_account_vnet_flow_logs      = azurerm_storage_account.storage_account_flow_log.id
-  law_workspace_id                    = azurerm_log_analytics_workspace.law.id
+  law_workspace_id                    = azurerm_log_analytics_workspace.law.workspace_id
   law_region                          = var.region
   law_resource_id                     = azurerm_log_analytics_workspace.law.id
   tags                                = var.tags
@@ -149,21 +149,22 @@ resource "azurerm_key_vault" "key_vault_public_demo1" {
   location            = var.region
   resource_group_name = azurerm_resource_group.rg_work.name
 
-  sku_name  = "Premium"
+  sku_name  = "premium"
   tenant_id = data.azurerm_subscription.current.tenant_id
 
-  enable_rbac_authorization       = true
+  rbac_authorization_enabled = true
 
   soft_delete_retention_days  = 7
   purge_protection_enabled    = false
 
   network_acls {
     default_action = "Allow"
-    bypass         = null
+    bypass         = "None"
     ip_rules       = []
   }
   tags = var.tags
 }
+
 
 ## Assign user Key Vault Administrator permissions on Key Vault instance
 ##
@@ -224,23 +225,28 @@ resource "azurerm_role_assignment" "umi_vm_key_vault_public_secret_demo1" {
 ## Create Private Endpoint for public Key Vault
 ##
 resource "azurerm_private_endpoint" "pe_key_vault_public_demo1" {
+  depends_on = [ 
+    module.infrastructure,
+    azurerm_key_vault.key_vault_public_demo1
+   ]
+
   name                = "pe${azurerm_key_vault.key_vault_public_demo1.name}vaults"
   location            = var.region
   resource_group_name = azurerm_resource_group.rg_work.name
-  subnet_id           = module.infrastructure.subnet_svc_id
+  subnet_id           = module.infrastructure.subnet_id_svc
 
   custom_network_interface_name = "nic${azurerm_key_vault.key_vault_public_demo1.name}vaults"
 
   private_service_connection {
     name                           = "peconn${azurerm_key_vault.key_vault_public_demo1.name}vaults"
     private_connection_resource_id = azurerm_key_vault.key_vault_public_demo1.id
-    subresource_names = ["vaults"]
+    subresource_names = ["vault"]
     is_manual_connection           = false
   }
 
   private_dns_zone_group {
     name                 = "zoneconn${azurerm_key_vault.key_vault_public_demo1.name}"
-    private_dns_zone_ids = ["${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"]
+    private_dns_zone_ids = ["/subscriptions/${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"]
   }
 
   tags = var.tags
@@ -256,17 +262,17 @@ resource "azurerm_key_vault" "key_vault_private_demo1" {
   location            = var.region
   resource_group_name = azurerm_resource_group.rg_work.name
 
-  sku_name  = "Premium"
+  sku_name  = "premium"
   tenant_id = data.azurerm_subscription.current.tenant_id
 
-  enable_rbac_authorization       = true
+  rbac_authorization_enabled = true
 
   soft_delete_retention_days  = 7
   purge_protection_enabled    = false
 
   network_acls {
     default_action = "Deny"
-    bypass         = null
+    bypass         = "None"
     ip_rules       = [var.trusted_ip]
   }
   tags = var.tags
@@ -309,11 +315,11 @@ resource "azurerm_monitor_diagnostic_setting" "diag_key_vault_private_demo1" {
 ##
 resource "azurerm_key_vault_secret" "secret_private_demo1" {
   depends_on = [
-    module.key_vault_private_secret_demo1
+    azurerm_key_vault.key_vault_private_demo1
   ]
   name         = "secret-private-word"
   value        = "orange"
-  key_vault_id = module.key_vault_private_secret_demo1.id
+  key_vault_id = azurerm_key_vault.key_vault_private_demo1.id
 }
 
 ## Create role assignment granting Key Vault Secrets User to virtual machine
@@ -331,23 +337,28 @@ resource "azurerm_role_assignment" "umi_vm_key_vault_private_secret_demo1" {
 ## Create Private Endpoint for private Key Vault
 ##
 resource "azurerm_private_endpoint" "pe_key_vault_private_demo1" {
+  depends_on = [ 
+    module.infrastructure,
+    azurerm_key_vault.key_vault_private_demo1
+   ]
+
   name                = "pe${azurerm_key_vault.key_vault_private_demo1.name}vaults"
   location            = var.region
   resource_group_name = azurerm_resource_group.rg_work.name
-  subnet_id           = module.infrastructure.subnet_svc_id
+  subnet_id           = module.infrastructure.subnet_id_svc
 
   custom_network_interface_name = "nic${azurerm_key_vault.key_vault_private_demo1.name}vaults"
 
   private_service_connection {
     name                           = "peconn${azurerm_key_vault.key_vault_private_demo1.name}vaults"
     private_connection_resource_id = azurerm_key_vault.key_vault_private_demo1.id
-    subresource_names = ["vaults"]
+    subresource_names = ["vault"]
     is_manual_connection           = false
   }
 
   private_dns_zone_group {
     name                 = "zoneconn${azurerm_key_vault.key_vault_private_demo1.name}"
-    private_dns_zone_ids = ["${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"]
+    private_dns_zone_ids = ["/subscriptions/${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"]
   }
 
   tags = var.tags
@@ -374,10 +385,10 @@ resource "azurerm_key_vault" "key_vault_demo2" {
   location            = var.region
   resource_group_name = azurerm_resource_group.rg_work.name
 
-  sku_name  = "Premium"
+  sku_name  = "premium"
   tenant_id = data.azurerm_subscription.current.tenant_id
 
-  enable_rbac_authorization       = true
+  rbac_authorization_enabled = true
 
   soft_delete_retention_days  = 7
   purge_protection_enabled    = true
@@ -465,7 +476,7 @@ resource "azurerm_storage_account" "storage_account_cmk_demo2" {
   identity {
     type = "UserAssigned"
     identity_ids = [
-      module.managed_identity_storage_account_demo2.id
+      azurerm_user_assigned_identity.umi_storage_account_demo2.id
     ]
   }
 
@@ -524,10 +535,14 @@ resource "azapi_resource" "ai_search_demo3" {
         }
       }
       # Networking-related controls
-      publicNetworkAccess = "disabled"
+      publicNetworkAccess = "Enabled"
       networkRuleSet = {
         bypass = "AzureServices"
-        ipRules = [var.trusted_ip]
+        ipRules = [
+          {
+            value = var.trusted_ip
+          }
+        ]
       }
     }
     tags = var.tags
@@ -558,23 +573,28 @@ resource "azurerm_monitor_diagnostic_setting" "diag_base_aisearch_demo3" {
 ## Create a Private Endpoint for the AI Search instance
 ##
 resource "azurerm_private_endpoint" "pe_ai_search_demo3" {
-  name                = "pe${azapi_resource.ai_search_demo3.name}"
+  depends_on = [ 
+    module.infrastructure,
+    azapi_resource.ai_search_demo3
+   ]
+
+  name                = "pe${azapi_resource.ai_search_demo3.name}search"
   location            = var.region
   resource_group_name = azurerm_resource_group.rg_work.name
-  subnet_id           = module.infrastructure.subnet_svc_id
+  subnet_id           = module.infrastructure.subnet_id_svc
 
   custom_network_interface_name = "nic${azapi_resource.ai_search_demo3.name}"
 
   private_service_connection {
     name                           = "peconn${azapi_resource.ai_search_demo3.name}"
     private_connection_resource_id = azapi_resource.ai_search_demo3.id
-    subresource_names = ["searchServices"]
+    subresource_names = ["searchService"]
     is_manual_connection           = false
   }
 
   private_dns_zone_group {
     name                 = "zoneconn${azapi_resource.ai_search_demo3.name}"
-    private_dns_zone_ids = ["${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.search.azure.net"]
+    private_dns_zone_ids = ["/subscriptions/${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.search.windows.net"]
   }
 
   tags = var.tags
@@ -610,9 +630,14 @@ resource "azapi_resource" "ai_foundry_account_demo3" {
 
       # Network-related controls
       # Disable public access but allow Trusted Azure Services exception
-      publicNetworkAccess = "Disabled"
+      publicNetworkAccess = "Enabled"
       networkAcls = {
         bypass        = "AzureServices"
+        ipRules      = [ 
+          {
+            value = var.trusted_ip
+          }
+        ]
         defaultAction = "Deny"
       }
     }
@@ -629,7 +654,7 @@ resource "azapi_resource" "ai_foundry_account_demo3" {
 ##
 resource "azurerm_monitor_diagnostic_setting" "diag_foundry_resource_demo3" {
   depends_on = [
-    azapi_resource.ai_foundry_account
+    azapi_resource.ai_foundry_account_demo3
   ]
 
   name                       = "diag"
@@ -655,7 +680,7 @@ resource "azurerm_monitor_diagnostic_setting" "diag_foundry_resource_demo3" {
 
 ## Create a deployment for OpenAI's GPT-4o
 ##
-resource "azurerm_cognitive_deployment" "openai_deployment_gpt_4_1_demo3" {
+resource "azurerm_cognitive_deployment" "openai_deployment_gpt_4_o_demo3" {
   depends_on = [
     azapi_resource.ai_foundry_account_demo3,
     azurerm_monitor_diagnostic_setting.diag_foundry_resource_demo3
@@ -679,7 +704,7 @@ resource "azurerm_cognitive_deployment" "openai_deployment_gpt_4_1_demo3" {
 ##
 resource "azurerm_cognitive_deployment" "openai_deployment_text_embedding_3_large_demo3" {
   depends_on = [
-    azurerm_cognitive_deployment.openai_deployment_gpt_4_1_demo3
+    azurerm_cognitive_deployment.openai_deployment_gpt_4_o_demo3
   ]
 
   name                 = "text-embedding-3-large"
@@ -696,6 +721,27 @@ resource "azurerm_cognitive_deployment" "openai_deployment_text_embedding_3_larg
   }
 }
 
+## Create a deployment for the text-embedding-ada-002 embedding model which is required for worklflow that build index in AI Foundry
+##
+resource "azurerm_cognitive_deployment" "openai_deployment_text_embedding_ada_002_demo3" {
+  depends_on = [
+    azurerm_cognitive_deployment.openai_deployment_text_embedding_3_large_demo3
+  ]
+
+  name                 = "text-embedding-ada-002"
+  cognitive_account_id = azapi_resource.ai_foundry_account_demo3.id
+
+  sku {
+    name     = "Standard"
+    capacity = 50
+  }
+
+  model {
+    format = "OpenAI"
+    name   = "text-embedding-ada-002"
+  }
+}
+
 ## Create Private Endpoint for AI Foundry account
 ##
 resource "azurerm_private_endpoint" "pe_foundry_demo3" {
@@ -707,23 +753,23 @@ resource "azurerm_private_endpoint" "pe_foundry_demo3" {
   name                = "pe${azapi_resource.ai_foundry_account_demo3.name}accounts"
   location            = var.region
   resource_group_name = azurerm_resource_group.rg_work.name
-  subnet_id           = module.infrastructure.subnet_svc_id
+  subnet_id           = module.infrastructure.subnet_id_svc
 
   custom_network_interface_name = "nic${azapi_resource.ai_foundry_account_demo3.name}accounts"
 
   private_service_connection {
     name                           = "peconn${azapi_resource.ai_foundry_account_demo3.name}accounts"
     private_connection_resource_id = azapi_resource.ai_foundry_account_demo3.id
-    subresource_names = ["accounts"]
+    subresource_names = ["account"]
     is_manual_connection           = false
   }
 
   private_dns_zone_group {
     name                 = "zoneconn${azapi_resource.ai_foundry_account_demo3.name}"
     private_dns_zone_ids = [
-      "${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.services.ai.azure.com",
-      "${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.openai.azure.com",
-      "${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.cognitiveservices.azure.com"
+      "/subscriptions/${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.services.ai.azure.com",
+      "/subscriptions/${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.openai.azure.com",
+      "/subscriptions/${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.cognitiveservices.azure.com"
     ]
   }
 
@@ -735,7 +781,7 @@ resource "azurerm_private_endpoint" "pe_foundry_demo3" {
 resource "azurerm_storage_account" "storage_account_ai_search_data_demo3" {
   name                = "stnspdemo3ais${local.region_code}${random_string.unique.result}"
   resource_group_name = azurerm_resource_group.rg_work.name
-  location            = var.region
+  location            = "eastus2"
   tags                = var.tags
 
   # Configure basic storage config settings
@@ -757,6 +803,53 @@ resource "azurerm_storage_account" "storage_account_ai_search_data_demo3" {
   }
 }
 
+## Create diagnostic settings for the storage account for blob and file endpoints
+##
+resource "azurerm_monitor_diagnostic_setting" "diag_storage_account_blob_demo3" {
+  depends_on = [
+    azurerm_storage_account.storage_account_ai_search_data_demo3
+  ]
+
+  name                       = "diag_blob_base"
+  target_resource_id         = "${azurerm_storage_account.storage_account_ai_search_data_demo3.id}/blobServices/default"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.law.id
+
+  enabled_log {
+    category = "StorageRead"
+  }
+
+  enabled_log {
+    category = "StorageWrite"
+  }
+
+  enabled_log {
+    category = "StorageDelete"
+  }
+}
+
+resource "azurerm_monitor_diagnostic_setting" "diag_storage_account_file_demo3" {
+  depends_on = [
+    azurerm_storage_account.storage_account_ai_search_data_demo3,
+    azurerm_monitor_diagnostic_setting.diag_storage_account_blob_demo3
+  ]
+
+  name                       = "diag_file_base"
+  target_resource_id         = "${azurerm_storage_account.storage_account_ai_search_data_demo3.id}/fileServices/default"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.law.id
+
+  enabled_log {
+    category = "StorageRead"
+  }
+
+  enabled_log {
+    category = "StorageWrite"
+  }
+
+  enabled_log {
+    category = "StorageDelete"
+  }
+}
+
 ## Create a Private Endpoint for the blob endpoint for the Storage Account where AI Search will pull its data from
 ##
 resource "azurerm_private_endpoint" "pe_storage_account_demo3" {
@@ -768,7 +861,7 @@ resource "azurerm_private_endpoint" "pe_storage_account_demo3" {
   name                = "pe${azurerm_storage_account.storage_account_ai_search_data_demo3.name}blob"
   location            = var.region
   resource_group_name = azurerm_resource_group.rg_work.name
-  subnet_id           = module.infrastructure.subnet_svc_id
+  subnet_id           = module.infrastructure.subnet_id_svc
 
   custom_network_interface_name = "nic${azurerm_storage_account.storage_account_ai_search_data_demo3.name}blob"
 
@@ -782,7 +875,7 @@ resource "azurerm_private_endpoint" "pe_storage_account_demo3" {
   private_dns_zone_group {
     name                 = "zoneconn${azurerm_storage_account.storage_account_ai_search_data_demo3.name}"
     private_dns_zone_ids = [
-      "${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+      "/subscriptions/${data.azurerm_subscription.current.subscription_id}/resourceGroups/${azurerm_resource_group.rg_work.name}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
     ]
   }
 
@@ -795,6 +888,150 @@ resource "azurerm_storage_container" "blob_data" {
   name                  = "data"
   storage_account_id    = azurerm_storage_account.storage_account_ai_search_data_demo3.id
   container_access_type = "private"
+}
+
+##### Create human role assignments
+#####
+
+## Create role assignment granting user read over the resource group
+##
+resource "azurerm_role_assignment" "role_assignment_rg_reader_user_demo3" {
+  depends_on = [ 
+    azurerm_resource_group.rg_work
+  ]
+  name                 = uuidv5("dns", "${azurerm_resource_group.rg_work.name}${var.object_id_user}reader")
+  scope                = azurerm_resource_group.rg_work.id
+  role_definition_name = "Reader"
+  principal_id         = var.object_id_user
+}
+
+## Create role assignment granting user data plane access to AI Foundry via Azure AI User role
+##
+resource "azurerm_role_assignment" "role_assignment_aifoundry_azure_ai_user_user_demo3" {
+  depends_on = [ 
+    azapi_resource.ai_foundry_account_demo3
+  ]
+  name                 = uuidv5("dns", "${azapi_resource.ai_foundry_account_demo3.name}${var.object_id_user}azureaiuser")
+  scope                = azapi_resource.ai_foundry_account_demo3.id
+  role_definition_name = "Azure AI User"
+  principal_id         = var.object_id_user
+}
+
+## Create role assignment granting user management plane access to create new indexes via Search Service Contributor role
+##
+resource "azurerm_role_assignment" "role_assignment_aisearch_service_contributor_user_demo3" {
+  depends_on = [ 
+    azapi_resource.ai_search_demo3
+  ]
+  name                 = uuidv5("dns", "${azapi_resource.ai_search_demo3.name}${var.object_id_user}searchservicecontributor")
+  scope                = azapi_resource.ai_search_demo3.id
+  role_definition_name = "Search Service Contributor"
+  principal_id         = var.object_id_user
+}
+
+## Create role assignment granting user data plane access to load data into an index via Search Index Data Contributor role
+##
+#resource "azurerm_role_assignment" "role_assignment_aisearch_service_index_data_contributor_user_demo3" {
+#  depends_on = [ 
+#    azapi_resource.ai_search_demo3
+#  ]
+#  name                 = uuidv5("dns", "${azapi_resource.ai_search_demo3.name}${var.object_id_user}searchindexdatacontributor")
+#  scope                = azapi_resource.ai_search_demo3.id
+#  role_definition_name = "Search Index Data Contributor"
+#  principal_id         = var.object_id_user
+#}
+
+## Create role assignment granting user data plane access to storage account via Storage Blob Data Contributor role
+##
+#resource "azurerm_role_assignment" "role_assignment_storage_blob_data_contributor_user_demo3" {
+#  depends_on = [
+#    azurerm_storage_account.storage_account_ai_search_data_demo3
+# ]
+#  name                 = uuidv5("dns", "${azurerm_storage_account.storage_account_ai_search_data_demo3.name}${var.object_id_user}blobdatacontributor")
+#  scope                = azurerm_storage_account.storage_account_ai_search_data_demo3.id
+#  role_definition_name = "Storage Blob Data Contributor"
+#  principal_id         = var.object_id_user
+#}
+
+##### Create non-human role assignments
+#####
+
+## Create role assignment granting the Foundry managed identity access to the management plane of the search service via Search Service Contributor role
+##
+resource "azurerm_role_assignment" "role_assignment_foundry_search_service_contributor_demo3" {
+  depends_on = [
+    azapi_resource.ai_foundry_account_demo3,
+    azapi_resource.ai_search_demo3
+  ]
+  name                 = uuidv5("dns", "${azapi_resource.ai_foundry_account_demo3.name}${azapi_resource.ai_search_demo3.name}searchservicecontributor")
+  scope                = azapi_resource.ai_search_demo3.id
+  role_definition_name = "Search Service Contributor"
+  principal_id         = azapi_resource.ai_foundry_account_demo3.output.identity.principalId
+}
+
+## Create role assignment granting the Foundry managed identity access to the data plane of the search service via Search Index Data Reader role
+##
+resource "azurerm_role_assignment" "role_assignment_foundry_search_index_data_reader_demo3" {
+  depends_on = [
+    azapi_resource.ai_foundry_account_demo3,
+    azapi_resource.ai_search_demo3
+  ]
+  name                 = uuidv5("dns", "${azapi_resource.ai_foundry_account_demo3.name}${azapi_resource.ai_search_demo3.name}searchindexdatareader")
+  scope                = azapi_resource.ai_search_demo3.id
+  role_definition_name = "Search Index Data Reader"
+  principal_id         = azapi_resource.ai_foundry_account_demo3.output.identity.principalId
+}
+
+## Create role assignment graingin the AI Search managed identity access to the data plane of the Foundry account via Cognitive Services OpenAI Contributor role
+##
+resource "azurerm_role_assignment" "role_assignment_aisearch_cognitive_services_openai_contributor_demo3" {
+  depends_on = [
+    azapi_resource.ai_search_demo3,
+    azapi_resource.ai_foundry_account_demo3
+  ]
+  name                 = uuidv5("dns", "${azapi_resource.ai_search_demo3.name}${azapi_resource.ai_foundry_account_demo3.name}cognitiveservicesopenaicontributor")
+  scope                = azapi_resource.ai_foundry_account_demo3.id
+  role_definition_name = "Cognitive Services OpenAI Contributor"
+  principal_id         = azapi_resource.ai_search_demo3.output.identity.principalId
+}
+
+## Create role assignment granting the Foundry managed identity access to the data plane of the storage account via Storage Blob Data Contributor role
+##
+resource "azurerm_role_assignment" "role_assignment_foundry_storage_blob_data_contributor_demo3" {
+  depends_on = [
+    azapi_resource.ai_foundry_account_demo3,
+    azurerm_storage_account.storage_account_ai_search_data_demo3
+  ]
+  name                 = uuidv5("dns", "${azapi_resource.ai_foundry_account_demo3.name}${azurerm_storage_account.storage_account_ai_search_data_demo3.name}blobdatacontributor")
+  scope                = azurerm_storage_account.storage_account_ai_search_data_demo3.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azapi_resource.ai_foundry_account_demo3.output.identity.principalId
+}
+
+## Create a role assignment granting the AI Search managed identity access to the data plane of the storage account via Storage Blob Data Reader role
+##
+resource "azurerm_role_assignment" "role_assignment_aisearch_storage_blob_data_reader_demo3" {
+  depends_on = [
+    azapi_resource.ai_search_demo3,
+    azurerm_storage_account.storage_account_ai_search_data_demo3
+  ]
+  name                 = uuidv5("dns", "${azapi_resource.ai_search_demo3.name}${azurerm_storage_account.storage_account_ai_search_data_demo3.name}blobdatareader")
+  scope                = azurerm_storage_account.storage_account_ai_search_data_demo3.id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = azapi_resource.ai_search_demo3.output.identity.principalId
+}
+
+## Create a role assignment granting the Foundry managed identity reader access to the storage account private endpoint via Reader role
+##
+resource "azurerm_role_assignment" "role_assignment_foundry_pe_storage_account_reader_demo3" {
+  depends_on = [
+    azapi_resource.ai_foundry_account_demo3,
+    azurerm_private_endpoint.pe_storage_account_demo3
+  ]
+  name                 = uuidv5("dns", "${azapi_resource.ai_foundry_account_demo3.name}${azurerm_private_endpoint.pe_storage_account_demo3.name}reader")
+  scope                = azurerm_private_endpoint.pe_storage_account_demo3.id
+  role_definition_name = "Reader"
+  principal_id         = azapi_resource.ai_foundry_account_demo3.output.identity.principalId
 }
 
 ########### Network Security Perimeter resources
@@ -909,20 +1146,6 @@ resource "azapi_resource" "profile_nsp_public_key_vault_demo1" {
   tags      = var.tags
 }
 
-## Create a profile of which the Log Analytics Workspace will be added with unrestricted network access
-##
-resource "azapi_resource" "profile_nsp_log_analytics_demo1" {
-  depends_on = [
-    azapi_resource.nsp_demo1
-  ]
-
-  type      = "Microsoft.Network/networkSecurityPerimeters/profiles@2024-07-01"
-  name      = "ploganalytics"
-  location  = var.region
-  parent_id = azapi_resource.nsp_demo1.id
-  tags      = var.tags
-}
-
 ## Associate the Key Vault with access restricted to a Private Endpoint to the profile
 ##
 resource "azapi_resource" "assoc_key_vault_private_demo1" {
@@ -939,9 +1162,9 @@ resource "azapi_resource" "assoc_key_vault_private_demo1" {
 
   body = {
     properties = {
-      accessMode = "Enforced"
+      accessMode = "Learning"
       privateLinkResource = {
-        id = module.key_vault_private_secret_demo1.id
+        id = azurerm_key_vault.key_vault_private_demo1.id
       }
       profile = {
         id = azapi_resource.profile_nsp_private_key_vault_demo1.id
@@ -969,36 +1192,8 @@ resource "azapi_resource" "access_rule_public_key_vault_demo1" {
     properties = {
       direction = "Inbound"
       addressPrefixes = [
-        "${[var.trusted_ips[0]]}/32"
+        "${var.trusted_ip}/32"
       ]
-    }
-    tags = var.tags
-  }
-}
-
-## Associate the Log Analytics Workspace with unrestricted network access to the profile
-##
-resource "azapi_resource" "assoc_log_analytics_demo1" {
-  depends_on = [
-    azapi_resource.profile_nsp_log_analytics_demo1,
-    azurerm_log_analytics_workspace.law
-  ]
-
-  type                      = "Microsoft.Network/networkSecurityPerimeters/resourceAssociations@2024-07-01"
-  name                      = "raloganalytics"
-  location                  = var.region
-  parent_id                 = azapi_resource.nsp_demo1.id
-  schema_validation_enabled = false
-
-  body = {
-    properties = {
-      accessMode = "Learning"
-      resource = {
-        id = azurerm_log_analytics_workspace.law.id
-      }
-      profile = {
-        id = azapi_resource.profile_nsp_log_analytics_demo1.id
-      }
     }
     tags = var.tags
   }
@@ -1113,20 +1308,6 @@ resource "azapi_resource" "profile_nsp_key_vault_demo2" {
   tags      = var.tags
 }
 
-## Create a profile of which the Log Analytics Workspace will be added with unrestricted network access
-##
-resource "azapi_resource" "profile_nsp_log_analytics_demo2" {
-  depends_on = [
-    azapi_resource.nsp_demo2
-  ]
-
-  type      = "Microsoft.Network/networkSecurityPerimeters/profiles@2024-07-01"
-  name      = "ploganalytics"
-  location  = var.region
-  parent_id = azapi_resource.nsp_demo2.id
-  tags      = var.tags
-}
-
 ## Associate the Key Vault instance to the profile to block all access to the Key Vault
 ##
 resource "azapi_resource" "assoc_key_vault_demo2" {
@@ -1143,9 +1324,9 @@ resource "azapi_resource" "assoc_key_vault_demo2" {
 
   body = {
     properties = {
-      accessMode = "Enforced"
+      accessMode = "Learning"
       privateLinkResource = {
-        id = azurerm_key_vault.storage_key_vault.id
+        id = azurerm_key_vault.key_vault_demo2.id
       }
       profile = {
         id = azapi_resource.profile_nsp_key_vault_demo2.id
@@ -1154,34 +1335,6 @@ resource "azapi_resource" "assoc_key_vault_demo2" {
     tags = var.tags
   }
 
-}
-
-## Associate the Log Analytics Workspace with unrestricted network access to the profile
-##
-resource "azapi_resource" "assoc_log_analytics_demo2" {
-  depends_on = [
-    azapi_resource.profile_nsp_log_analytics_demo2,
-    azurerm_log_analytics_workspace.law
-  ]
-
-  type                      = "Microsoft.Network/networkSecurityPerimeters/resourceAssociations@2024-07-01"
-  name                      = "raloganalytics"
-  location                  = var.region
-  parent_id                 = azapi_resource.nsp_demo2.id
-  schema_validation_enabled = false
-
-  body = {
-    properties = {
-      accessMode = "Learning"
-      resource = {
-        id = azurerm_log_analytics_workspace.law.id
-      }
-      profile = {
-        id = azapi_resource.profile_nsp_log_analytics_demo2.id
-      }
-    }
-    tags = var.tags
-  }
 }
 
 ##### Create the Network Security Perimeter resources for Demo 3
@@ -1210,7 +1363,7 @@ resource "azurerm_monitor_diagnostic_setting" "diag_nsp_demo3" {
 
   name                       = "diag-base"
   target_resource_id         = azapi_resource.nsp_demo3.id
-  log_analytics_workspace_id = module.log_analytics_workspace.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.law.id
 
   enabled_log {
     category = "NspPublicInboundPerimeterRulesAllowed"
@@ -1279,20 +1432,6 @@ resource "azapi_resource" "profile_nsp_all_ai_resources_demo3" {
   tags      = var.tags
 }
 
-## Create a profile of which the Log Analytics Workspace will be added with unrestricted network access
-##
-resource "azapi_resource" "profile_nsp_log_analytics_demo3" {
-  depends_on = [
-    azapi_resource.nsp_demo3
-  ]
-
-  type      = "Microsoft.Network/networkSecurityPerimeters/profiles@2024-07-01"
-  name      = "ploganalytics"
-  location  = var.region
-  parent_id = azapi_resource.nsp_demo3.id
-  tags      = var.tags
-}
-
 ## Create a resource association to associate the Azure OpenAI instance with the Network Security Perimeter profile
 ##
 resource "azapi_resource" "assoc_foundry_demo3" {
@@ -1310,7 +1449,7 @@ resource "azapi_resource" "assoc_foundry_demo3" {
     properties = {
       accessMode = "Learning"
       privateLinkResource = {
-        id = azapi_resource.foundry_demo3.id
+        id = azapi_resource.ai_foundry_account_demo3.id
       }
       profile = {
         id = azapi_resource.profile_nsp_all_ai_resources_demo3.id
@@ -1325,7 +1464,7 @@ resource "azapi_resource" "assoc_foundry_demo3" {
 ##
 resource "azapi_resource" "assoc_storage_demo3" {
   depends_on = [
-    azapi_resource.profile_nsp_all_resources_demo3
+    azapi_resource.profile_nsp_all_ai_resources_demo3
   ]
 
   type                      = "Microsoft.Network/networkSecurityPerimeters/resourceAssociations@2024-07-01"
@@ -1336,12 +1475,12 @@ resource "azapi_resource" "assoc_storage_demo3" {
 
   body = {
     properties = {
-      accessMode = "Enforced"
+      accessMode = "Learning"
       privateLinkResource = {
-        id = module.storage_account_ai_search_data_demo3.id
+        id = azurerm_storage_account.storage_account_ai_search_data_demo3.id
       }
       profile = {
-        id = azapi_resource.profile_nsp_all_resources_demo3.id
+        id = azapi_resource.profile_nsp_all_ai_resources_demo3.id
       }
     }
     tags = var.tags
@@ -1364,7 +1503,7 @@ resource "azapi_resource" "assoc_ai_search_demo3" {
 
   body = {
     properties = {
-      accessMode = "Enforced"
+      accessMode = "Learning"
       privateLinkResource = {
         id = azapi_resource.ai_search_demo3.id
       }
@@ -1394,7 +1533,7 @@ resource "azapi_resource" "access_rule_trusted_ip_demo3" {
     properties = {
       direction = "Inbound"
       addressPrefixes = [
-        "${var.trusted_ips[0]}/32"
+        "${var.trusted_ip}/32"
       ]
     }
     tags = var.tags
