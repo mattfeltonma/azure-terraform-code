@@ -2,11 +2,13 @@ address_space_azure_prod = "10.0.0.0/20"
 address_space_azure_nonprod = "10.0.16.0/20"
 address_space_cloud = "10.0.0.0/8"
 address_space_onpremises = "192.168.0.0/16"
-admin_username = "someadminuser"
-admin_password = "somepassword"
-key_vault_admin = "8a3440a9-1df4-42c3-be38-XXXXXXXXXXXX"
-location_prod = "eastus2"
-location_nonprod = "centralus"
+vm_admin_username = "someuser"
+vm_admin_password = "somepassword"
+region_prod = "centralus"
+region_nonprod = "canadacentral"
 management_group_id = "/providers/Microsoft.Management/managementGroups/jogcloud"
 tags = {environment = "demo", product = "avnm"}
+trusted_ips = [
+    "XX.XX.XX.XX"
+]
 user_object_id = "2e69d9f2-b5b3-482b-9c15-XXXXXXXXXXXX"

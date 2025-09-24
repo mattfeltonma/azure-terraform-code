@@ -1,0 +1,21 @@
+# General settings
+region = "westus3"
+tags = {
+  environment = "lab"
+  product    = "nsp"
+}
+
+# Network settings
+address_space_vnet = "10.0.0.0/25"
+network_watcher_name = "NetworkWatcher_"
+network_watcher_resource_group_name = "NetworkWatcherRG"
+trusted_ip = "XX.XX.XX.XX"
+
+# Identity settings
+object_id_user = "2e69d9f2-b5b3-482b-9c15-XXXXXXXXXXXX"
+
+# Compute settings
+vm_admin_username = "someuser"
+vm_admin_password = "somepassword"
+sku_vm_size = "Standard_D2s_v3"
+
