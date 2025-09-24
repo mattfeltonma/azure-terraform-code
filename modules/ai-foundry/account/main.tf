@@ -253,7 +253,7 @@ resource "azurerm_cognitive_deployment" "openai_deployment_gpt_4_1" {
 
   sku {
     name     = "DataZoneStandard"
-    capacity = 300
+    capacity = 100
   }
 
   model {

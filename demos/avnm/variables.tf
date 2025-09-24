@@ -18,32 +18,14 @@ variable "address_space_azure_nonprod" {
   type        = string
 }
 
-variable "admin_username" {
-  description = "The username of the local administration on the virtual machines"
+variable "region_prod" {
+  description = "The Azure region to deploy production resources to"
   type        = string
 }
 
-variable "admin_password" {
-  description = "The password of the local administration on the virtual machines"
+variable "region_nonprod" {
+  description = "The Azure region to deploy non-production resources to"
   type        = string
-  sensitive   = true
-}
-
-variable "key_vault_admin" {
-  description = "The object id of the user or service principal to assign the Key Vault Administrator role to"
-  type        = string
-
-}
-
-variable "location_prod" {
-  description = "The location to deploy production resources to"
-  type        = string
-}
-
-variable "location_nonprod" {
-  description = "The location to deploy non-production resources to"
-  type        = string
-  default = null
 }
 
 variable "management_group_id" {
@@ -63,7 +45,7 @@ variable "network_watcher_resource_group_name" {
   default     = "NetworkWatcherRG"
 }
 
-variable "sku_vm_size" {
+variable "vm_sku_size" {
   description = "The SKU to use for virtual machines created"
   type        = string
   default     = "Standard_D2s_v3"
@@ -74,7 +56,23 @@ variable "tags" {
   type        = map(string)
 }
 
+variable "trusted_ips" {
+  description = "The list of trusted IPs to allow through the PaaS service firewalls"
+  type        = list(string)
+}
+
 variable "user_object_id" {
   description = "The Entra ID user object id to assign the IPAM Pool User role assignment"
   type        = string
+}
+
+variable "vm_admin_username" {
+  description = "The username of the local administration on the virtual machines"
+  type        = string
+}
+
+variable "vm_admin_password" {
+  description = "The password of the local administration on the virtual machines"
+  type        = string
+  sensitive   = true
 }

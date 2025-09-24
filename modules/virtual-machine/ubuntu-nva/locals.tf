@@ -1,8 +1,8 @@
 locals {
   # Configure standard naming convention for relevant resources
   vm_name      = "vm"
-  nic_name_int = "nici"
-  nic_name_ext = "nice"
+  nic_name_trusted = "nictru"
+  nic_name_untrusted = "niceuntru"
 
   # Network variables
   ip_configuration_name = "primary"

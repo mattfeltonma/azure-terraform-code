@@ -8,13 +8,6 @@ resource "azurerm_virtual_network" "vnet" {
 
   address_space = [var.address_space_vnet]
   dns_servers   = var.dns_servers
-
-  lifecycle {
-    ignore_changes = [
-      tags["created_date"],
-      tags["created_by"]
-    ]
-  }
 }
 
 resource "azurerm_monitor_diagnostic_setting" "diag-base" {
@@ -27,7 +20,7 @@ resource "azurerm_monitor_diagnostic_setting" "diag-base" {
     category = "VMProtectionAlerts"
   }
 }
-
+ 
 ## Create the flow log and enable traffic analytics
 ##
 resource "azurerm_network_watcher_flow_log" "vnet_flow_log" {
@@ -462,8 +455,10 @@ module "nva" {
   address_space_cloud_region = var.address_space_azure
   address_space_on_prem      = var.address_space_onpremises
 
-  nic_private_private_ip_address = cidrhost(var.subnet_cidr_firewall_private, (count.index + 20))
-  nic_public_private_ip_address  = cidrhost(var.subnet_cidr_firewall_public, (count.index + 20))
+  # Set NICs to use 20th IP address in each subnet
+  #
+  nic_trusted_ip_address = cidrhost(var.subnet_cidr_firewall_private, (count.index + 20))
+  nic_untrusted_ip_address  = cidrhost(var.subnet_cidr_firewall_public, (count.index + 20))
   asn_router = var.asn_router
 
   subnet_id_private = azurerm_subnet.subnet_firewall_private.id
